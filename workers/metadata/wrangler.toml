@@ -2,3 +2,8 @@ name = "marginalia-metadata"
 main = "src/index.js"
 compatibility_date = "2026-04-01"
 workers_dev = true
+
+[vars]
+MOCK_LLM = "false"
+OPENAI_MODEL = "gpt-5.4-nano"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"

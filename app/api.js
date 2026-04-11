@@ -39,8 +39,16 @@ export async function ingestArticle(url, settings = loadSettings()) {
 }
 
 function getEndpoint(apiBaseUrl) {
-  const base = apiBaseUrl ? apiBaseUrl.replace(/\/+$/, "") : globalThis.location.origin;
+  const base = apiBaseUrl ? apiBaseUrl.replace(/\/+$/, "") : getSameOriginApiBase();
   return new URL(ARTICLE_PATH, `${base}/`).toString();
+}
+
+function getSameOriginApiBase() {
+  const host = globalThis.location?.hostname || "";
+  if (host.endsWith(".github.io")) {
+    throw new Error("Production API URL is not configured. Set app/config.js to the article Worker URL.");
+  }
+  return globalThis.location.origin;
 }
 
 async function getErrorMessage(response) {

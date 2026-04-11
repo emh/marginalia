@@ -41,6 +41,37 @@ When using OpenAI locally, set `OPENAI_API_KEY`, `OPENAI_MODEL`, and optionally 
 
 For production, configure Cloudflare Worker secrets with Wrangler or the Cloudflare dashboard rather than committing them to the repository.
 
+## Cloudflare Production
+
+The frontend is static and can keep publishing to GitHub Pages. The frontend needs the public article Worker URL in `app/config.js`:
+
+```js
+globalThis.MARGINALIA_CONFIG = {
+  apiBaseUrl: "https://marginalia-article.YOUR_WORKERS_SUBDOMAIN.workers.dev"
+};
+```
+
+Keep the OpenAI key out of GitHub. Store it as a Cloudflare Worker secret on the metadata Worker:
+
+```sh
+npx wrangler secret put OPENAI_API_KEY --config workers/metadata/wrangler.toml
+```
+
+The production model names are non-secret Worker vars in `workers/metadata/wrangler.toml`. The GitHub Pages origin is allowed by CORS in `workers/article/wrangler.toml`; add any future custom frontend domain there too.
+
+The Worker deploy workflow lives at `.github/workflows/deploy-workers.yml`. Add these GitHub repository secrets before relying on the workflow:
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+The workflow deploys `marginalia-metadata` first, then `marginalia-article`, because the article Worker has a service binding to the metadata Worker.
+
+You can also deploy manually:
+
+```sh
+npm run deploy:workers
+```
+
 ## Current Shape
 
 - `app/` contains the static GitHub Pages app.

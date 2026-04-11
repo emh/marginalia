@@ -74,7 +74,7 @@ export function saveAppState(state) {
 
 export function loadSettings() {
   return {
-    apiBaseUrl: getDefaultApiBaseUrl(),
+    apiBaseUrl: getConfiguredApiBaseUrl() || getDefaultApiBaseUrl(),
     appToken: ""
   };
 }
@@ -121,6 +121,13 @@ function getDefaultApiBaseUrl() {
   }
 
   return "";
+}
+
+function getConfiguredApiBaseUrl() {
+  const value = globalThis.MARGINALIA_CONFIG?.apiBaseUrl;
+  if (typeof value !== "string") return "";
+  if (value.includes("YOUR_")) return "";
+  return value.trim().replace(/\/+$/, "");
 }
 
 function hostFromUrl(url) {
