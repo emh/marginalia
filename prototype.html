@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#FFFFF8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Marginalia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper: #FFFFF8;
+  --ink: #111;
+  --ink-mid: #555;
+  --ink-light: #999;
+  --ink-faint: #ccc;
+  --red: #8B0000;
+  --red-light: #a52a2a;
+  --rule: #e0dcd6;
+  --hover: rgba(0,0,0,0.02);
+  --font: 'Crimson Pro', 'Palatino Linotype', Palatino, Georgia, serif;
+  --mono: 'SF Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*, *::before, *::after {
+  margin: 0; padding: 0; box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--paper);
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+}
+
+body.no-scroll { overflow: hidden; }
+
+/* ─── Layout ─── */
+
+#library {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 24px;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: 80px;
+}
+
+/* ─── Header ─── */
+
+header { padding-top: 48px; margin-bottom: 32px; }
+
+header h1 {
+  font-family: var(--font);
+  font-size: 44px;
+  font-weight: 300;
+  font-style: italic;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+#stats {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-light);
+  letter-spacing: 0.03em;
+  margin-bottom: 8px;
+}
+
+.reading-progress {
+  width: 100%;
+  height: 1px;
+  background: var(--rule);
+  overflow: hidden;
+}
+
+.reading-progress-fill {
+  height: 100%;
+  background: var(--red);
+  transition: width 0.6s var(--ease);
+  will-change: width;
+}
+
+/* ─── Input ─── */
+
+.input-wrap {
+  position: relative;
+  margin-bottom: 28px;
+}
+
+#main-input {
+  width: 100%;
+  font-family: var(--font);
+  font-size: 16px;
+  font-style: italic;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--rule);
+  padding: 10px 0;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+#main-input:focus { border-bottom-color: var(--ink); }
+
+#main-input::placeholder {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+#input-status {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-light);
+  height: 18px;
+  line-height: 18px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.input-progress {
+  position: absolute;
+  bottom: 18px;
+  left: 0;
+  height: 1px;
+  width: 0;
+  background: var(--red);
+  transition: width 2s linear;
+  pointer-events: none;
+}
+
+.input-progress.running { width: 100%; }
+
+/* ─── Categories ─── */
+
+#categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-bottom: 12px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.cat-item {
+  font-size: 14px;
+  font-weight: 400;
+  padding: 6px 0;
+  margin-right: 18px;
+  color: var(--ink-light);
+  cursor: pointer;
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+
+.cat-item:hover { color: var(--ink-mid); }
+.cat-item.active { color: var(--ink); }
+
+/* ─── Sort ─── */
+
+.sort-control {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-light);
+  letter-spacing: 0.02em;
+  margin-bottom: 20px;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  padding: 4px 0;
+}
+
+.sort-control:hover { color: var(--ink-mid); }
+
+/* ─── Article List ─── */
+
+.article-item {
+  padding: 20px 0;
+  border-top: 1px solid var(--rule);
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.article-item:last-child { border-bottom: 1px solid var(--rule); }
+.article-item:active { opacity: 0.55; }
+.article-item.is-read { opacity: 0.4; }
+.article-item.is-read:active { opacity: 0.3; }
+
+.article-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-light);
+  letter-spacing: 0.02em;
+  margin-bottom: 3px;
+}
+
+.article-title {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.28;
+  margin-bottom: 5px;
+  letter-spacing: -0.01em;
+}
+
+.article-summary {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-mid);
+  margin-bottom: 7px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.article-tags {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-light);
+  letter-spacing: 0.01em;
+}
+
+/* ─── Empty State ─── */
+
+.empty-state {
+  padding: 48px 0;
+  text-align: center;
+  font-style: italic;
+  color: var(--ink-light);
+  font-size: 15px;
+  display: none;
+}
+
+/* ─── Overlays ─── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--paper);
+  transform: translateX(100%);
+  transition: transform 0.35s var(--ease), visibility 0s linear 0.35s;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  z-index: 100;
+  visibility: hidden;
+}
+
+.overlay.active {
+  transform: translateX(0);
+  visibility: visible;
+  transition: transform 0.35s var(--ease), visibility 0s linear 0s;
+}
+
+#qa-overlay { z-index: 200; }
+
+.overlay-content {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px;
+  padding-top: calc(24px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+}
+
+/* ─── Back Button ─── */
+
+.back-btn {
+  font-family: var(--font);
+  font-size: 15px;
+  color: var(--ink-light);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 12px 16px 12px 0;
+  margin-bottom: 20px;
+  display: inline-block;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.back-btn:hover { color: var(--ink); }
+
+/* ─── Detail View ─── */
+
+.detail-title {
+  font-size: 30px;
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+}
+
+.detail-byline {
+  font-size: 15px;
+  color: var(--ink-mid);
+  margin-bottom: 4px;
+}
+
+.detail-pub {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-light);
+  letter-spacing: 0.02em;
+  margin-bottom: 28px;
+}
+
+.detail-summary {
+  font-size: 17px;
+  line-height: 1.7;
+  margin-bottom: 20px;
+}
+
+.detail-tags {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-light);
+  letter-spacing: 0.01em;
+  margin-bottom: 0;
+}
+
+.detail-rule {
+  border: none;
+  border-top: 1px solid var(--rule);
+  margin: 28px 0;
+}
+
+/* ─── Sections ─── */
+
+.section-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-light);
+  margin-bottom: 14px;
+}
+
+.related-item {
+  padding: 10px 0;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.related-item:active { opacity: 0.5; }
+
+.related-title {
+  display: block;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.3;
+  margin-bottom: 2px;
+  transition: color 0.15s;
+}
+
+.related-item:hover .related-title { color: var(--red); }
+
+.related-meta {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-light);
+}
+
+/* ─── Actions ─── */
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: baseline;
+}
+
+.action-link {
+  font-family: var(--font);
+  font-size: 15px;
+  color: var(--red);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 10px 0;
+  text-decoration: none;
+  display: inline-block;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.action-link:hover { color: var(--red-light); }
+
+.action-link.muted {
+  color: var(--ink-light);
+}
+
+.action-link.muted:hover { color: var(--ink-mid); }
+
+.action-link.done {
+  color: var(--ink-light);
+  cursor: default;
+}
+
+/* ─── Q&A View ─── */
+
+.qa-header-title {
+  font-size: 18px;
+  font-weight: 400;
+  font-style: italic;
+  margin-bottom: 4px;
+  color: var(--ink-mid);
+}
+
+.qa-subtitle {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-light);
+  letter-spacing: 0.02em;
+  margin-bottom: 32px;
+}
+
+.qa-pair {
+  margin-bottom: 32px;
+}
+
+.qa-question {
+  font-style: italic;
+  font-size: 15px;
+  color: var(--ink-light);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.qa-answer {
+  font-size: 16px;
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+.qa-divider {
+  display: block;
+  text-align: center;
+  color: var(--rule);
+  margin: 28px 0;
+  font-size: 14px;
+  letter-spacing: 0.5em;
+}
+
+.qa-input-area {
+  margin-top: 32px;
+  padding-top: 20px;
+  border-top: 1px solid var(--rule);
+}
+
+#qa-input {
+  width: 100%;
+  font-family: var(--font);
+  font-size: 16px;
+  font-style: italic;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--rule);
+  padding: 10px 0;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+#qa-input:focus { border-bottom-color: var(--ink); }
+
+#qa-input::placeholder {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+/* ─── Toast ─── */
+
+.toast {
+  position: fixed;
+  bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  background: var(--paper);
+  padding: 8px 20px;
+  border: 1px solid var(--rule);
+  opacity: 0;
+  transition: opacity 0.3s, transform 0.3s var(--ease);
+  z-index: 9999;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ─── Animations ─── */
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in {
+  animation: fadeSlideIn 0.45s var(--ease) both;
+}
+
+.read-next-section {
+  animation: fadeSlideIn 0.4s var(--ease) both;
+}
+
+/* ─── Typing indicator ─── */
+
+.typing-dots::after {
+  content: '';
+  animation: dots 1.2s steps(4, end) infinite;
+}
+
+@keyframes dots {
+  0% { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+}
+
+/* ─── Responsive ─── */
+
+@media (min-width: 700px) {
+  .overlay-content { padding-left: 40px; padding-right: 40px; }
+  #library { padding-left: 40px; padding-right: 40px; }
+}
+
+@media (max-width: 380px) {
+  header h1 { font-size: 36px; }
+  .detail-title { font-size: 26px; }
+  .cat-item { margin-right: 12px; font-size: 13px; }
+}
+</style>
+</head>
+<body>
+
+<main id="library">
+  <header>
+    <h1>marginalia</h1>
+    <p id="stats"></p>
+    <div class="reading-progress"><div class="reading-progress-fill" id="progress-fill"></div></div>
+  </header>
+
+  <div class="input-wrap">
+    <input type="text" id="main-input" placeholder="paste url or search articles..." autocomplete="off" spellcheck="false">
+    <div class="input-progress" id="input-progress"></div>
+    <div id="input-status"></div>
+  </div>
+
+  <nav id="categories"></nav>
+  <div class="sort-control" id="sort-btn"></div>
+  <div id="article-list"></div>
+  <div class="empty-state" id="empty-state">No articles found.</div>
+</main>
+
+<div class="overlay" id="detail-overlay">
+  <div class="overlay-content" id="detail-content"></div>
+</div>
+
+<div class="overlay" id="qa-overlay">
+  <div class="overlay-content" id="qa-content"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════
+   Marginalia — Article Reading List
+   ═══════════════════════════════════════════ */
+
+// ── Seed Data ──────────────────────────────
+
+const SEED = [
+  {
+    id: 1, url: 'https://www.incompleteideas.net/IncIdeas/BitterLesson.html',
+    title: 'The Bitter Lesson',
+    source: 'incompleteideas.net', author: 'Rich Sutton',
+    dateAdded: '2026-04-09T10:30:00', readingTime: 8,
+    summary: 'The biggest lesson from 70 years of AI research is that general methods leveraging computation are ultimately the most effective by a large margin. Researchers have repeatedly tried to build in human knowledge, only to be surpassed by methods that simply scale with available computation.',
+    tags: ['artificial-intelligence', 'machine-learning', 'computation'],
+    category: 'Technology', isRead: false, isFavorite: false,
+    vec: [0.9, 0.5, 0.1, 0.0, 0.1, 0.4, 0.0, 0.0]
+  },
+  {
+    id: 2, url: 'https://www.dartmouth.edu/~matc/MathDrama/reading/Wigner.html',
+    title: 'The Unreasonable Effectiveness of Mathematics in the Natural Sciences',
+    source: 'dartmouth.edu', author: 'Eugene Wigner',
+    dateAdded: '2026-04-08T14:15:00', readingTime: 22,
+    summary: 'Wigner explores the remarkable fact that mathematical concepts developed in abstract contexts turn out to describe physical phenomena with extraordinary precision. This "miracle" of applicability is something we neither understand nor deserve, yet it forms the foundation of all scientific progress.',
+    tags: ['mathematics', 'physics', 'philosophy-of-science'],
+    category: 'Science', isRead: true, isFavorite: true,
+    vec: [0.3, 0.9, 0.1, 0.0, 0.0, 0.7, 0.0, 0.0]
+  },
+  {
+    id: 3, url: 'https://frankchimero.com/blog/2015/the-webs-grain/',
+    title: "The Web's Grain",
+    source: 'frankchimero.com', author: 'Frank Chimero',
+    dateAdded: '2026-04-07T09:00:00', readingTime: 18,
+    summary: "Every material has a grain \u2014 a direction in which it wants to be worked. The web's grain is fluidity, flexibility, and interconnection. Designers who work with this grain create experiences that feel natural and enduring rather than forced and brittle.",
+    tags: ['web-design', 'responsive', 'craft'],
+    category: 'Design', isRead: false, isFavorite: false,
+    vec: [0.4, 0.0, 0.3, 0.0, 0.0, 0.2, 0.9, 0.0]
+  },
+  {
+    id: 4, url: 'https://mcfunley.com/choose-boring-technology',
+    title: 'Choose Boring Technology',
+    source: 'mcfunley.com', author: 'Dan McKinley',
+    dateAdded: '2026-04-06T16:45:00', readingTime: 10,
+    summary: 'Every company gets roughly three innovation tokens to spend on new, unproven technology. Everything else should be boring and well-understood. The value of boring technology is that its failure modes are well-known. Novel choices carry unknown unknowns that compound dangerously.',
+    tags: ['engineering', 'architecture', 'pragmatism'],
+    category: 'Technology', isRead: false, isFavorite: true,
+    vec: [0.8, 0.1, 0.1, 0.0, 0.2, 0.3, 0.2, 0.0]
+  },
+  {
+    id: 5, url: 'https://www.orwell.ru/library/essays/politics/english/e_polit',
+    title: 'Politics and the English Language',
+    source: 'orwell.ru', author: 'George Orwell',
+    dateAdded: '2026-04-05T11:20:00', readingTime: 15,
+    summary: 'Orwell dissects the relationship between political orthodoxy and the degradation of language. Vague, pretentious prose serves to obscure truth and defend the indefensible. Clear writing requires clear thinking, and the decline of a language must ultimately have political and economic causes.',
+    tags: ['language', 'politics', 'writing'],
+    category: 'Culture', isRead: true, isFavorite: false,
+    vec: [0.0, 0.0, 0.8, 0.7, 0.1, 0.3, 0.0, 0.0]
+  },
+  {
+    id: 6, url: 'https://fee.org/resources/i-pencil/',
+    title: 'I, Pencil',
+    source: 'fee.org', author: 'Leonard Read',
+    dateAdded: '2026-04-04T08:30:00', readingTime: 12,
+    summary: 'Told from the perspective of a pencil, this essay reveals the staggering complexity of producing even the simplest objects. No single person knows how to make a pencil. Millions of people cooperate without central direction through the price system to bring one into existence.',
+    tags: ['economics', 'markets', 'complexity'],
+    category: 'Economics', isRead: false, isFavorite: false,
+    vec: [0.1, 0.1, 0.2, 0.3, 0.9, 0.3, 0.0, 0.0]
+  },
+  {
+    id: 7, url: 'https://www.philosopher.eu/nagel-what-is-it-like-to-be-a-bat/',
+    title: 'What Is It Like to Be a Bat?',
+    source: 'philosopher.eu', author: 'Thomas Nagel',
+    dateAdded: '2026-04-03T19:00:00', readingTime: 25,
+    summary: "Consciousness has an essentially subjective character \u2014 there is something it is \u201Clike\u201D to be a conscious organism. No amount of physical or functional knowledge about bats can convey what echolocation feels like from the inside. This subjective quality means physicalist theories of mind are fundamentally incomplete.",
+    tags: ['consciousness', 'philosophy-of-mind', 'subjectivity'],
+    category: 'Philosophy', isRead: false, isFavorite: true,
+    vec: [0.1, 0.3, 0.1, 0.0, 0.0, 0.9, 0.0, 0.1]
+  },
+  {
+    id: 8, url: 'https://dreamsongs.com/RiseOfWorseIsBetter.html',
+    title: 'Worse Is Better',
+    source: 'dreamsongs.com', author: 'Richard P. Gabriel',
+    dateAdded: '2026-04-02T13:10:00', readingTime: 14,
+    summary: 'Gabriel contrasts two philosophies: "the right thing" prioritizes interface correctness, while "worse is better" prioritizes implementation simplicity. The latter produces software that spreads virally and improves over time \u2014 ultimately winning despite being technically inferior at every point.',
+    tags: ['software-design', 'unix', 'simplicity'],
+    category: 'Technology', isRead: true, isFavorite: false,
+    vec: [0.8, 0.1, 0.2, 0.0, 0.1, 0.5, 0.3, 0.0]
+  },
+  {
+    id: 9, url: 'https://alistapart.com/article/a-dao-of-web-design/',
+    title: 'A Dao of Web Design',
+    source: 'alistapart.com', author: 'John Allsopp',
+    dateAdded: '2026-04-01T10:00:00', readingTime: 11,
+    summary: "The web is a new medium that should not be constrained by print conventions. Designers must embrace inherent flexibility \u2014 fluid layouts, relative units, adaptable typography \u2014 rather than fighting to control every pixel. The tension between control and adaptability remains the central challenge.",
+    tags: ['web-design', 'flexibility', 'philosophy'],
+    category: 'Design', isRead: false, isFavorite: false,
+    vec: [0.3, 0.0, 0.3, 0.0, 0.0, 0.3, 0.9, 0.0]
+  },
+  {
+    id: 10, url: 'https://www.newyorker.com/magazine/the-end-of-the-english-major',
+    title: 'The End of the English Major',
+    source: 'newyorker.com', author: 'Nathan Heller',
+    dateAdded: '2026-03-30T15:30:00', readingTime: 28,
+    summary: 'Humanities enrollment has plummeted across American universities. Students choose STEM and business for economic security, while the humanities struggle to articulate their value. Yet critical analysis, persuasive writing, and ethical reasoning have never been more relevant in a world awash in AI-generated content.',
+    tags: ['education', 'humanities', 'culture'],
+    category: 'Culture', isRead: false, isFavorite: false,
+    vec: [0.1, 0.1, 0.9, 0.4, 0.3, 0.3, 0.0, 0.0]
+  },
+  {
+    id: 11, url: 'https://www.ncbi.nlm.nih.gov/pmc/articles/sleep-cognition/',
+    title: 'Sleep and Cognitive Performance',
+    source: 'ncbi.nlm.nih.gov', author: 'Walker & Stickgold',
+    dateAdded: '2026-03-28T20:00:00', readingTime: 35,
+    summary: 'A review of 150 studies establishing that sleep deprivation impairs attention, working memory, and executive function more severely than understood. Even modest restriction to six hours produces cumulative deficits equivalent to total sleep deprivation, yet individuals consistently underestimate their impairment.',
+    tags: ['sleep', 'cognition', 'neuroscience'],
+    category: 'Science', isRead: true, isFavorite: false,
+    vec: [0.1, 0.8, 0.1, 0.0, 0.0, 0.1, 0.0, 0.9]
+  },
+  {
+    id: 12, url: 'https://aeon.co/essays/the-merits-and-perils-of-metaphor-in-science',
+    title: 'The Merits and Perils of Metaphor in Science',
+    source: 'aeon.co', author: 'Michael Strevens',
+    dateAdded: '2026-03-25T12:45:00', readingTime: 16,
+    summary: "Scientific understanding relies heavily on metaphor \u2014 electrons \u201Corbit,\u201D genes \u201Ccode,\u201D the brain \u201Ccomputes.\u201D These metaphors are indispensable for thinking but carry hidden assumptions that can mislead for decades. The best scientists know when to exploit a metaphor and when to abandon it.",
+    tags: ['science', 'language', 'epistemology'],
+    category: 'Science', isRead: false, isFavorite: false,
+    vec: [0.1, 0.7, 0.3, 0.0, 0.0, 0.6, 0.0, 0.0]
+  },
+  {
+    id: 13, url: 'https://www.ribbonfarm.com/a-big-little-idea-called-legibility/',
+    title: 'A Big Little Idea Called Legibility',
+    source: 'ribbonfarm.com', author: 'Venkatesh Rao',
+    dateAdded: '2026-03-22T09:15:00', readingTime: 20,
+    summary: "Drawing on James C. Scott\u2019s \u201CSeeing Like a State,\u201D Rao explains how authoritarian high-modernist planning fails by imposing simplified, legible order on complex systems. The pattern repeats from forestry to urban planning: simplify what you see, then reshape reality to match, destroying the organic complexity that made the system work.",
+    tags: ['systems-thinking', 'governance', 'complexity'],
+    category: 'Philosophy', isRead: false, isFavorite: true,
+    vec: [0.1, 0.2, 0.3, 0.6, 0.3, 0.8, 0.0, 0.0]
+  }
+];
+
+// ── State ──────────────────────────────────
+
+const STORAGE_KEY = 'marginalia_v1';
+
+const SORTS = [
+  { key: 'newest', label: 'newest first' },
+  { key: 'oldest', label: 'oldest first' },
+  { key: 'longest', label: 'longest first' },
+  { key: 'shortest', label: 'shortest first' },
+  { key: 'alpha', label: 'a \u2192 z' }
+];
+
+const state = {
+  articles: [],
+  filter: 'All',
+  sortIndex: 0,
+  search: '',
+  currentArticle: null,
+  qaMessages: []
+};
+
+// ── Utilities ──────────────────────────────
+
+const $ = id => document.getElementById(id);
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function formatDate(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const m = months[d.getMonth()];
+  const day = d.getDate();
+  if (d.getFullYear() !== now.getFullYear()) return `${m} ${day}, ${d.getFullYear()}`;
+  return `${m} ${day}`;
+}
+
+function isUrl(s) {
+  const t = s.trim();
+  if (t.includes(' ') || t.length < 4) return false;
+  return /^https?:\/\//i.test(t) || /^[a-z0-9][-a-z0-9]*\.[a-z]{2,}/i.test(t);
+}
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function cosine(a, b) {
+  let dot = 0, ma = 0, mb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    ma += a[i] * a[i];
+    mb += b[i] * b[i];
+  }
+  const denom = Math.sqrt(ma) * Math.sqrt(mb);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+function similar(article, n) {
+  return state.articles
+    .filter(a => a.id !== article.id)
+    .map(a => ({ ...a, score: cosine(article.vec, a.vec) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, n);
+}
+
+function similarUnread(article, n) {
+  return state.articles
+    .filter(a => a.id !== article.id && !a.isRead)
+    .map(a => ({ ...a, score: cosine(article.vec, a.vec) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, n);
+}
+
+// ── Persistence ────────────────────────────
+
+function save() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ articles: state.articles, filter: state.filter, sortIndex: state.sortIndex })); } catch(e) {}
+}
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const d = JSON.parse(raw);
+      if (d.articles && d.articles.length) {
+        state.articles = d.articles;
+        state.filter = d.filter || 'All';
+        state.sortIndex = d.sortIndex || 0;
+        return;
+      }
+    }
+  } catch(e) {}
+  state.articles = JSON.parse(JSON.stringify(SEED));
+}
+
+// ── Toast ──────────────────────────────────
+
+let toastTimer;
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('visible'), 2000);
+}
+
+// ── Stats ──────────────────────────────────
+
+function renderStats() {
+  const total = state.articles.length;
+  const read = state.articles.filter(a => a.isRead).length;
+  const mins = state.articles.filter(a => !a.isRead).reduce((s, a) => s + a.readingTime, 0);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const timeStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+
+  $('stats').textContent = `${total} articles \u00B7 ${read} read \u00B7 ${timeStr} remaining`;
+
+  const pct = total > 0 ? (read / total) * 100 : 0;
+  $('progress-fill').style.width = pct + '%';
+}
+
+// ── Categories ─────────────────────────────
+
+function getCategories() {
+  const cats = new Set(state.articles.map(a => a.category));
+  return ['All', 'Saved', ...Array.from(cats).sort()];
+}
+
+function renderCategories() {
+  const cats = getCategories();
+  $('categories').innerHTML = cats.map(c =>
+    `<span class="cat-item${state.filter === c ? ' active' : ''}" data-cat="${esc(c)}">${esc(c)}</span>`
+  ).join('');
+}
+
+// ── Sort ───────────────────────────────────
+
+function renderSort() {
+  $('sort-btn').textContent = SORTS[state.sortIndex].label + ' \u2193';
+}
+
+// ── Article List ───────────────────────────
+
+function getFiltered() {
+  let list = [...state.articles];
+
+  if (state.filter === 'Saved') {
+    list = list.filter(a => a.isFavorite);
+  } else if (state.filter !== 'All') {
+    list = list.filter(a => a.category === state.filter);
+  }
+
+  if (state.search) {
+    const q = state.search.toLowerCase();
+    list = list.filter(a =>
+      a.title.toLowerCase().includes(q) ||
+      a.author.toLowerCase().includes(q) ||
+      a.source.toLowerCase().includes(q) ||
+      a.summary.toLowerCase().includes(q) ||
+      a.tags.some(t => t.includes(q))
+    );
+  }
+
+  const sort = SORTS[state.sortIndex].key;
+  switch (sort) {
+    case 'newest': list.sort((a, b) => new Date(b.dateAdded) - new Date(a.dateAdded)); break;
+    case 'oldest': list.sort((a, b) => new Date(a.dateAdded) - new Date(b.dateAdded)); break;
+    case 'longest': list.sort((a, b) => b.readingTime - a.readingTime); break;
+    case 'shortest': list.sort((a, b) => a.readingTime - b.readingTime); break;
+    case 'alpha': list.sort((a, b) => a.title.localeCompare(b.title)); break;
+  }
+
+  return list;
+}
+
+function renderArticles() {
+  const articles = getFiltered();
+  const container = $('article-list');
+  const empty = $('empty-state');
+
+  if (!articles.length) {
+    container.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+
+  empty.style.display = 'none';
+
+  container.innerHTML = articles.map(a => `
+    <article class="article-item${a.isRead ? ' is-read' : ''}" data-id="${a.id}">
+      <div class="article-meta">
+        <span>${esc(a.source)} \u00B7 ${a.readingTime} min</span>
+        <span>${formatDate(a.dateAdded)}</span>
+      </div>
+      <h2 class="article-title">${esc(a.title)}</h2>
+      <p class="article-summary">${esc(a.summary)}</p>
+      <div class="article-tags">${a.tags.map(t => esc(t)).join(' \u00B7 ')}</div>
+    </article>
+  `).join('');
+}
+
+// ── Detail View ────────────────────────────
+
+function renderDetail(article) {
+  const sim = similar(article, 3);
+  const dc = $('detail-content');
+
+  dc.innerHTML = `
+    <button class="back-btn" data-action="back">\u2190 Back</button>
+
+    <h1 class="detail-title">${esc(article.title)}</h1>
+    <p class="detail-byline">${esc(article.author)}</p>
+    <p class="detail-pub">${esc(article.source)} \u00B7 ${article.readingTime} min read \u00B7 ${formatDate(article.dateAdded)}</p>
+
+    <p class="detail-summary">${esc(article.summary)}</p>
+
+    <p class="detail-tags">${article.tags.map(t => esc(t)).join(' \u00B7 ')}</p>
+
+    <hr class="detail-rule">
+
+    <div class="section-label">Related</div>
+    ${sim.map(a => `
+      <div class="related-item" data-id="${a.id}">
+        <span class="related-title">${esc(a.title)}</span>
+        <span class="related-meta">${esc(a.author)} \u00B7 ${a.readingTime} min</span>
+      </div>
+    `).join('')}
+
+    <hr class="detail-rule">
+
+    <div class="detail-actions">
+      <button class="action-link" data-action="toggle-read">${article.isRead ? 'Read \u2713' : 'Mark as read'}</button>
+      <button class="action-link" data-action="toggle-fav">${article.isFavorite ? 'Saved \u25C6' : 'Save'}</button>
+      <button class="action-link" data-action="qa">Ask a question</button>
+      <a class="action-link muted" href="${esc(article.url)}" target="_blank" rel="noopener">Open \u2197</a>
+    </div>
+
+    ${article.isRead ? renderReadNext(article) : ''}
+  `;
+}
+
+function renderReadNext(article) {
+  const suggestions = similarUnread(article, 3);
+  if (!suggestions.length) return '';
+  return `
+    <hr class="detail-rule">
+    <div class="read-next-section">
+      <div class="section-label">Read next</div>
+      ${suggestions.map(a => `
+        <div class="related-item" data-id="${a.id}">
+          <span class="related-title">${esc(a.title)}</span>
+          <span class="related-meta">${esc(a.author)} \u00B7 ${a.readingTime} min</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+// ── Q&A View ───────────────────────────────
+
+function renderQA(article) {
+  const qc = $('qa-content');
+  qc.innerHTML = `
+    <button class="back-btn" data-action="back">\u2190 Back</button>
+
+    <div class="qa-header-title">${esc(article.title)}</div>
+    <div class="qa-subtitle">Ask anything about this article</div>
+
+    <div id="qa-messages">
+      ${state.qaMessages.map(m => `
+        <div class="qa-pair">
+          <p class="qa-question">${esc(m.q)}</p>
+          <p class="qa-answer">${esc(m.a)}</p>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="qa-input-area">
+      <input type="text" id="qa-input" placeholder="Your question\u2026" autocomplete="off" spellcheck="false">
+    </div>
+  `;
+}
+
+function generateAnswer(article, question) {
+  const q = question.toLowerCase().trim();
+  const sentences = article.summary.split(/\.\s+/).filter(Boolean);
+
+  if (/what.*(about|summary|main|point|argue|claim|thesis)|summarize|overview|gist|tldr/i.test(q)) {
+    return article.summary;
+  }
+
+  if (/who.*(wrote|author|write)|^author/i.test(q)) {
+    return `This was written by ${article.author} and published on ${article.source}. It\u2019s a ${article.readingTime}-minute read covering ${article.tags.slice(0, 2).join(' and ').replace(/-/g, ' ')}.`;
+  }
+
+  if (/topic|tag|categor|subject|about what/i.test(q)) {
+    return `Categorized under ${article.category}. Key topics: ${article.tags.join(', ').replace(/-/g, ' ')}.\n\n${sentences[0]}.`;
+  }
+
+  if (/why.*(important|matter|significant|relevant|care)|significance|so what/i.test(q)) {
+    const last = sentences.length > 1 ? ' ' + sentences[sentences.length - 1].trim().replace(/\.$/, '') + '.' : '';
+    return `"${article.title}" matters because ${sentences[0].toLowerCase().replace(/^\w/, c => c)}.${last} This has shaped thinking across ${article.category.toLowerCase()} and remains widely referenced.`;
+  }
+
+  if (/key|takeaway|lesson|learn|insight|bullet/i.test(q)) {
+    return 'Key takeaways:\n\n' + sentences.map((s, i) => `${i + 1}. ${s.trim().replace(/\.$/, '')}`).join('\n');
+  }
+
+  if (/similar|related|like this|recommend|else|more/i.test(q)) {
+    const sim = similar(article, 3);
+    if (!sim.length) return 'Not enough articles in your collection to find strong thematic matches yet.';
+    return `Based on thematic overlap, these explore related territory:\n\n${sim.map(a => `\u2014 "${a.title}" by ${a.author}`).join('\n')}\n\nThey share themes around ${article.tags.slice(0, 2).join(' and ').replace(/-/g, ' ')}.`;
+  }
+
+  if (/critic|disagree|counter|problem|flaw|wrong|weak|limit/i.test(q)) {
+    return `A common critique of "${article.title}" is whether ${sentences[0].toLowerCase()} holds universally. The nuances of ${article.tags[0].replace(/-/g, ' ')} are arguably more complex than presented, and practical contexts often demand consideration of factors beyond the article\u2019s central thesis.`;
+  }
+
+  if (/how.*(apply|use|practical|implement)|application|practice/i.test(q)) {
+    return `The practical upshot: when working in ${article.tags[0].replace(/-/g, ' ')}, ${sentences[0].toLowerCase()} This offers a useful lens for decision-making within ${article.category.toLowerCase()}, particularly when evaluating competing approaches.`;
+  }
+
+  if (/how long|time|read/i.test(q)) {
+    return `It\u2019s estimated at ${article.readingTime} minutes. Published on ${article.source} by ${article.author}.`;
+  }
+
+  return `On "${article.title}" \u2014 ${sentences[0]}. ${sentences.length > 1 ? sentences[1] + '.' : ''}\n\nYou can ask about the main argument, key takeaways, criticisms, related articles, or practical applications.`;
+}
+
+// ── Navigation ─────────────────────────────
+
+function showDetail(id) {
+  const article = state.articles.find(a => a.id === id);
+  if (!article) return;
+  state.currentArticle = article;
+  state.qaMessages = [];
+  renderDetail(article);
+  $('detail-overlay').classList.add('active');
+  $('detail-overlay').scrollTop = 0;
+  document.body.classList.add('no-scroll');
+}
+
+function showQA() {
+  if (!state.currentArticle) return;
+  renderQA(state.currentArticle);
+  $('qa-overlay').classList.add('active');
+  $('qa-overlay').scrollTop = 0;
+  setTimeout(() => { const inp = $('qa-input'); if (inp) inp.focus(); }, 380);
+}
+
+function goBack() {
+  if ($('qa-overlay').classList.contains('active')) {
+    $('qa-overlay').classList.remove('active');
+    return;
+  }
+  if ($('detail-overlay').classList.contains('active')) {
+    $('detail-overlay').classList.remove('active');
+    document.body.classList.remove('no-scroll');
+    renderAll();
+  }
+}
+
+// ── Actions ────────────────────────────────
+
+function toggleRead(id) {
+  const a = state.articles.find(x => x.id === id);
+  if (!a) return;
+  a.isRead = !a.isRead;
+  if (a.isRead) a.dateRead = new Date().toISOString();
+  else delete a.dateRead;
+  save();
+  renderDetail(a);
+  renderStats();
+  toast(a.isRead ? 'Marked as read' : 'Marked as unread');
+}
+
+function toggleFav(id) {
+  const a = state.articles.find(x => x.id === id);
+  if (!a) return;
+  a.isFavorite = !a.isFavorite;
+  save();
+  renderDetail(a);
+  toast(a.isFavorite ? 'Saved' : 'Removed');
+}
+
+function askQuestion(question) {
+  if (!state.currentArticle || !question.trim()) return;
+  const answer = generateAnswer(state.currentArticle, question);
+  state.qaMessages.push({ q: question.trim(), a: answer });
+  renderQA(state.currentArticle);
+
+  const qaOverlay = $('qa-overlay');
+  const msgs = $('qa-messages');
+  if (msgs && msgs.lastElementChild) {
+    msgs.lastElementChild.classList.add('animate-in');
+  }
+  qaOverlay.scrollTop = qaOverlay.scrollHeight;
+  setTimeout(() => { const inp = $('qa-input'); if (inp) inp.focus(); }, 50);
+}
+
+// ── Add Article ────────────────────────────
+
+const FIRST_NAMES = ['James','Sarah','Michael','Elena','David','Maria','Robert','Anna','Kenji','Priya'];
+const LAST_NAMES = ['Chen','Williams','Garcia','Johansson','Okafor','Lee','Wilson','Das','Moreau','Petrov'];
+
+function randAuthor() {
+  return FIRST_NAMES[Math.floor(Math.random()*FIRST_NAMES.length)] + ' ' +
+         LAST_NAMES[Math.floor(Math.random()*LAST_NAMES.length)];
+}
+
+function generateArticle(url) {
+  let domain;
+  try {
+    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    domain = u.hostname.replace(/^www\./, '');
+  } catch { domain = 'article.com'; }
+
+  const pathParts = url.replace(/^https?:\/\//, '').split(/[\/\-_?&#=]/).filter(w => w.length > 3 && !/^(www|com|org|net|html|htm|php|aspx)$/i.test(w));
+  const titleWords = pathParts.slice(0, 6).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  const title = titleWords.length > 1 ? titleWords.join(' ') : 'Article from ' + domain;
+
+  const cats = ['Technology','Science','Culture','Philosophy','Economics','Design','Health'];
+  const category = cats[Math.floor(Math.random() * cats.length)];
+
+  const tagPools = {
+    Technology: ['software','engineering','systems','programming','infrastructure','ai'],
+    Science: ['research','physics','biology','neuroscience','methodology','data'],
+    Culture: ['society','media','criticism','narrative','trends','identity'],
+    Philosophy: ['epistemology','ethics','reasoning','metaphysics','logic','mind'],
+    Economics: ['markets','policy','incentives','trade','growth','labor'],
+    Design: ['interaction','typography','systems-design','ux','craft','aesthetics'],
+    Health: ['wellness','cognition','exercise','nutrition','sleep','longevity']
+  };
+  const pool = tagPools[category];
+  const tags = pool.sort(() => Math.random() - 0.5).slice(0, 2 + Math.floor(Math.random() * 2));
+
+  const ci = cats.indexOf(category);
+  const vec = cats.map((_, i) => i === ci ? 0.7 + Math.random() * 0.3 : Math.random() * 0.35);
+
+  return {
+    id: Date.now() + Math.floor(Math.random() * 1000),
+    url: url.startsWith('http') ? url : 'https://' + url,
+    title, source: domain, author: randAuthor(),
+    dateAdded: new Date().toISOString(),
+    readingTime: 5 + Math.floor(Math.random() * 28),
+    summary: `An article from ${domain} exploring themes in ${category.toLowerCase()}. Covers ${tags.slice(0, 2).join(' and ').replace(/-/g, ' ')}. Add to your reading list for the full analysis.`,
+    tags, category, isRead: false, isFavorite: false, vec
+  };
+}
+
+let isProcessing = false;
+
+async function addArticle(url) {
+  if (isProcessing) return;
+  isProcessing = true;
+
+  const input = $('main-input');
+  const status = $('input-status');
+  const progressBar = $('input-progress');
+
+  input.value = '';
+  input.disabled = true;
+  status.textContent = 'extracting\u2026';
+  progressBar.classList.add('running');
+
+  await delay(700);
+  status.textContent = 'categorizing\u2026';
+  await delay(600);
+  status.textContent = 'summarizing\u2026';
+  await delay(700);
+
+  const article = generateArticle(url);
+  state.articles.unshift(article);
+  save();
+
+  progressBar.classList.remove('running');
+  progressBar.style.transition = 'none';
+  progressBar.style.width = '0';
+  requestAnimationFrame(() => {
+    progressBar.style.transition = '';
+  });
+
+  status.textContent = '';
+  input.disabled = false;
+  input.focus();
+
+  renderAll();
+
+  const newEl = document.querySelector(`[data-id="${article.id}"]`);
+  if (newEl) newEl.classList.add('animate-in');
+
+  toast('Article added');
+  isProcessing = false;
+}
+
+// ── Render All ─────────────────────────────
+
+function renderAll() {
+  renderStats();
+  renderCategories();
+  renderSort();
+  renderArticles();
+}
+
+// ── Events ─────────────────────────────────
+
+function bindEvents() {
+  // Main input: search or add URL
+  const input = $('main-input');
+  const status = $('input-status');
+
+  input.addEventListener('input', () => {
+    const val = input.value.trim();
+    if (isUrl(val)) {
+      status.textContent = '\u21B5 to add article';
+      state.search = '';
+    } else {
+      status.textContent = '';
+      state.search = val;
+    }
+    renderArticles();
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const val = input.value.trim();
+      if (isUrl(val)) {
+        e.preventDefault();
+        addArticle(val);
+      }
+    }
+    if (e.key === 'Escape') {
+      input.value = '';
+      state.search = '';
+      status.textContent = '';
+      renderArticles();
+      input.blur();
+    }
+  });
+
+  // Categories
+  $('categories').addEventListener('click', (e) => {
+    const cat = e.target.closest('.cat-item');
+    if (!cat) return;
+    state.filter = cat.dataset.cat;
+    save();
+    renderCategories();
+    renderArticles();
+  });
+
+  // Sort
+  $('sort-btn').addEventListener('click', () => {
+    state.sortIndex = (state.sortIndex + 1) % SORTS.length;
+    save();
+    renderSort();
+    renderArticles();
+  });
+
+  // Article list
+  $('article-list').addEventListener('click', (e) => {
+    const item = e.target.closest('.article-item');
+    if (item) showDetail(parseInt(item.dataset.id));
+  });
+
+  // Detail view
+  $('detail-content').addEventListener('click', (e) => {
+    const action = e.target.closest('[data-action]');
+    if (action) {
+      const act = action.dataset.action;
+      if (act === 'back') { goBack(); return; }
+      if (act === 'toggle-read') { toggleRead(state.currentArticle.id); return; }
+      if (act === 'toggle-fav') { toggleFav(state.currentArticle.id); return; }
+      if (act === 'qa') { showQA(); return; }
+    }
+    const rel = e.target.closest('.related-item');
+    if (rel) {
+      const id = parseInt(rel.dataset.id);
+      state.currentArticle = state.articles.find(a => a.id === id);
+      if (state.currentArticle) {
+        state.qaMessages = [];
+        renderDetail(state.currentArticle);
+        $('detail-overlay').scrollTop = 0;
+      }
+    }
+  });
+
+  // Q&A view
+  $('qa-content').addEventListener('click', (e) => {
+    const action = e.target.closest('[data-action]');
+    if (action && action.dataset.action === 'back') goBack();
+  });
+
+  $('qa-content').addEventListener('keydown', (e) => {
+    if (e.target.id === 'qa-input' && e.key === 'Enter') {
+      e.preventDefault();
+      askQuestion(e.target.value);
+    }
+  });
+
+  // Hardware back (popstate)
+  window.addEventListener('popstate', () => {
+    if ($('qa-overlay').classList.contains('active') || $('detail-overlay').classList.contains('active')) {
+      goBack();
+    }
+  });
+
+  // Keyboard: Escape to go back
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if ($('qa-overlay').classList.contains('active') || $('detail-overlay').classList.contains('active')) {
+        goBack();
+      }
+    }
+  });
+}
+
+// ── Init ───────────────────────────────────
+
+function init() {
+  load();
+  renderAll();
+  bindEvents();
+}
+
+init();
+</script>
+</body>
+</html>

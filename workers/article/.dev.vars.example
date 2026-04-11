@@ -1,0 +1,9 @@
+# Optional. If set, the browser sends this as a Bearer token.
+APP_TOKEN=""
+
+# Keep these aligned with the frontend dev server.
+ALLOWED_ORIGINS="http://localhost:8000,http://127.0.0.1:8000,http://localhost:8010,http://127.0.0.1:8010"
+METADATA_WORKER_URL="http://localhost:8788"
+
+# Optional. Used only when direct article fetch fails, for example on expired TLS certificates.
+READER_FALLBACK_URL="https://r.jina.ai/http://r.jina.ai/http://"

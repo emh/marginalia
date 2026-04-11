@@ -1,0 +1,7 @@
+# Set true for local development without OpenAI.
+MOCK_LLM="true"
+
+# Set these when MOCK_LLM is false.
+OPENAI_API_KEY=""
+OPENAI_MODEL=""
+OPENAI_EMBEDDING_MODEL=""

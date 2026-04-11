@@ -1,0 +1,13 @@
+name = "marginalia-article"
+main = "src/index.js"
+compatibility_date = "2026-04-01"
+workers_dev = true
+
+services = [
+  { binding = "METADATA", service = "marginalia-metadata" }
+]
+
+[vars]
+ALLOWED_ORIGINS = "http://localhost:8000,http://127.0.0.1:8000,http://localhost:8010,http://127.0.0.1:8010"
+METADATA_WORKER_URL = "http://localhost:8788"
+READER_FALLBACK_URL = "https://r.jina.ai/http://r.jina.ai/http://"

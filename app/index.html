@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#fffff8">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Marginalia</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./main.js"></script>
+</head>
+<body>
+  <main id="library">
+    <header>
+      <h1>marginalia</h1>
+      <p id="stats"></p>
+      <div class="reading-progress"><div class="reading-progress-fill" id="progress-fill"></div></div>
+    </header>
+
+    <div class="input-wrap">
+      <input type="text" id="main-input" placeholder="paste url or search articles..." autocomplete="off" spellcheck="false">
+      <div class="input-progress" id="input-progress"></div>
+      <div id="input-status"></div>
+    </div>
+
+    <nav id="categories" aria-label="Article categories"></nav>
+    <div class="toolbar">
+      <button class="sort-control" id="sort-btn" type="button"></button>
+    </div>
+    <div id="article-list"></div>
+    <div class="empty-state" id="empty-state">No articles found.</div>
+  </main>
+
+  <div class="overlay" id="detail-overlay">
+    <div class="overlay-content" id="detail-content"></div>
+  </div>
+
+  <div class="overlay" id="qa-overlay">
+    <div class="overlay-content" id="qa-content"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</body>
+</html>
