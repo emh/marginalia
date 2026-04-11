@@ -10,7 +10,7 @@
     "deploy:worker:metadata": "wrangler deploy --config workers/metadata/wrangler.toml",
     "deploy:worker:article": "wrangler deploy --config workers/article/wrangler.toml",
     "deploy:workers": "npm run deploy:worker:metadata && npm run deploy:worker:article",
-    "check": "node --check app/config.js && node --check app/main.js && node --check app/api.js && node --check app/storage.js && node --check workers/article/src/index.js && node --check workers/metadata/src/index.js"
+    "check": "node --check app/config.js && node --check app/version.js && node --check app/sw.js && node --check app/main.js && node --check app/api.js && node --check app/storage.js && node -e \"JSON.parse(require('node:fs').readFileSync('app/manifest.webmanifest', 'utf8'))\" && node --check workers/article/src/index.js && node --check workers/metadata/src/index.js"
   },
   "devDependencies": {
     "@web/dev-server": "^0.4.6",

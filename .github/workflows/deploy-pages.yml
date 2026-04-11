@@ -28,6 +28,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Stamp app version
+        run: printf 'globalThis.MARGINALIA_BUILD_ID = "%s";\n' "$GITHUB_SHA" > app/version.js
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
