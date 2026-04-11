@@ -72,6 +72,14 @@ You can also deploy manually:
 npm run deploy:workers
 ```
 
+## GitHub Pages
+
+Branch-based GitHub Pages only publishes from the repository root or `/docs`. This app uses `.github/workflows/deploy-pages.yml` to publish the `/app` directory as the site root instead.
+
+In GitHub, set Pages source to **GitHub Actions**:
+
+`Settings -> Pages -> Build and deployment -> Source -> GitHub Actions`
+
 ## Current Shape
 
 - `app/` contains the static GitHub Pages app.
