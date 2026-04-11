@@ -13,7 +13,7 @@ const state = {
   ...loadAppState(),
   search: "",
   currentArticle: null,
-  qaMessages: [],
+  pendingDeleteId: null,
   settings: loadSettings()
 };
 
@@ -250,8 +250,8 @@ function renderDetail(article) {
 
     <div class="detail-actions">
       <button class="action-link" data-action="toggle-read" type="button">${article.isRead ? "Read" : "Mark as read"}</button>
-      <button class="action-link" data-action="qa" type="button">Ask a question</button>
       <a class="action-link muted" href="${esc(article.url)}" target="_blank" rel="noopener">Open</a>
+      ${renderDeleteAction(article)}
     </div>
 
     ${article.isRead ? renderReadNext(article) : ""}
@@ -267,6 +267,18 @@ function renderRelated(article) {
   `;
 }
 
+function renderDeleteAction(article) {
+  if (state.pendingDeleteId !== article.id) {
+    return `<button class="action-link muted danger" data-action="request-delete" type="button">Delete</button>`;
+  }
+
+  return `
+    <span class="delete-confirm-label">Delete?</span>
+    <button class="action-link danger" data-action="confirm-delete" type="button">Yes</button>
+    <button class="action-link muted" data-action="cancel-delete" type="button">Cancel</button>
+  `;
+}
+
 function renderReadNext(article) {
   const suggestions = similarUnread(article, 3);
   if (!suggestions.length) return "";
@@ -279,87 +291,23 @@ function renderReadNext(article) {
   `;
 }
 
-function renderQA(article) {
-  $("qa-content").innerHTML = `
-    <button class="back-btn" data-action="back" type="button">Back</button>
-
-    <div class="qa-header-title">${esc(article.title)}</div>
-    <div class="qa-subtitle">Ask anything about this article</div>
-
-    <div id="qa-messages">
-      ${state.qaMessages.map(message => `
-        <div class="qa-pair">
-          <p class="qa-question">${esc(message.q)}</p>
-          <p class="qa-answer">${esc(message.a)}</p>
-        </div>
-      `).join("")}
-    </div>
-
-    <div class="qa-input-area">
-      <input type="text" id="qa-input" placeholder="Your question..." autocomplete="off" spellcheck="false">
-    </div>
-  `;
-}
-
-function generateAnswer(article, question) {
-  const query = question.toLowerCase().trim();
-  const sentences = (article.summary || "").split(/\.\s+/).map(s => s.trim()).filter(Boolean);
-  const first = sentences[0] || `${article.title} is in your library from ${sourceFor(article)}`;
-
-  if (/what.*(about|summary|main|point|argue|claim|thesis)|summarize|overview|gist|tldr/i.test(query)) {
-    return article.summary || first;
-  }
-
-  if (/who.*(wrote|author|write)|^author/i.test(query)) {
-    return `This was written by ${authorFor(article)} and published on ${sourceFor(article)}. It is a ${article.readingTime || 1}-minute read covering ${(article.tags || []).slice(0, 2).join(" and ").replace(/-/g, " ")}.`;
-  }
-
-  if (/topic|tag|categor|subject|about what/i.test(query)) {
-    return `Categorized under ${article.category || "Other"}. Key topics: ${(article.tags || []).join(", ").replace(/-/g, " ")}.\n\n${first}.`;
-  }
-
-  if (/similar|related|like this|recommend|else|more/i.test(query)) {
-    const related = similar(article, 3);
-    if (!related.length) return "Not enough articles in your collection to find strong thematic matches yet.";
-    return `Based on thematic overlap, these explore related territory:\n\n${related.map(candidate => `- "${candidate.title}" by ${authorFor(candidate)}`).join("\n")}`;
-  }
-
-  if (/key|takeaway|lesson|learn|insight|bullet/i.test(query)) {
-    return `Key takeaways:\n\n${sentences.map((sentence, index) => `${index + 1}. ${sentence.replace(/\.$/, "")}`).join("\n")}`;
-  }
-
-  return `On "${article.title}": ${first}.${sentences.length > 1 ? ` ${sentences[1]}.` : ""}`;
-}
-
 function showDetail(id) {
   const article = state.articles.find(candidate => candidate.id === id);
   if (!article) return;
 
   state.currentArticle = article;
-  state.qaMessages = [];
+  state.pendingDeleteId = null;
   renderDetail(article);
   $("detail-overlay").classList.add("active");
   $("detail-overlay").scrollTop = 0;
   document.body.classList.add("no-scroll");
 }
 
-function showQA() {
-  if (!state.currentArticle) return;
-  renderQA(state.currentArticle);
-  $("qa-overlay").classList.add("active");
-  $("qa-overlay").scrollTop = 0;
-  setTimeout(() => $("qa-input")?.focus(), 380);
-}
-
 function goBack() {
-  if ($("qa-overlay").classList.contains("active")) {
-    $("qa-overlay").classList.remove("active");
-    return;
-  }
-
   if ($("detail-overlay").classList.contains("active")) {
     $("detail-overlay").classList.remove("active");
     document.body.classList.remove("no-scroll");
+    state.pendingDeleteId = null;
     renderAll();
   }
 }
@@ -378,17 +326,34 @@ function toggleRead(id) {
   toast(article.isRead ? "Marked as read" : "Marked as unread");
 }
 
-function askQuestion(question) {
-  if (!state.currentArticle || !question.trim()) return;
+function requestDeleteCurrentArticle() {
+  if (!state.currentArticle) return;
+  state.pendingDeleteId = state.currentArticle.id;
+  renderDetail(state.currentArticle);
+}
 
-  const answer = generateAnswer(state.currentArticle, question);
-  state.qaMessages.push({ q: question.trim(), a: answer });
-  renderQA(state.currentArticle);
+function cancelDeleteCurrentArticle() {
+  if (!state.currentArticle) return;
+  state.pendingDeleteId = null;
+  renderDetail(state.currentArticle);
+}
 
-  const messages = $("qa-messages");
-  messages?.lastElementChild?.classList.add("animate-in");
-  $("qa-overlay").scrollTop = $("qa-overlay").scrollHeight;
-  setTimeout(() => $("qa-input")?.focus(), 50);
+function deleteCurrentArticle() {
+  if (!state.currentArticle) return;
+
+  const articleId = state.currentArticle.id;
+  const index = state.articles.findIndex(candidate => candidate.id === articleId);
+  if (index < 0) return;
+
+  state.articles.splice(index, 1);
+  state.currentArticle = null;
+  state.pendingDeleteId = null;
+  save();
+
+  $("detail-overlay").classList.remove("active");
+  document.body.classList.remove("no-scroll");
+  renderAll();
+  toast("Article deleted");
 }
 
 async function addArticle(url) {
@@ -529,7 +494,9 @@ function bindEvents() {
     if (action) {
       if (action.dataset.action === "back") return goBack();
       if (action.dataset.action === "toggle-read") return toggleRead(state.currentArticle.id);
-      if (action.dataset.action === "qa") return showQA();
+      if (action.dataset.action === "request-delete") return requestDeleteCurrentArticle();
+      if (action.dataset.action === "confirm-delete") return deleteCurrentArticle();
+      if (action.dataset.action === "cancel-delete") return cancelDeleteCurrentArticle();
     }
 
     const related = event.target.closest(".related-item");
@@ -537,29 +504,14 @@ function bindEvents() {
     const article = state.articles.find(candidate => candidate.id === related.dataset.id);
     if (!article) return;
     state.currentArticle = article;
-    state.qaMessages = [];
+    state.pendingDeleteId = null;
     renderDetail(article);
     $("detail-overlay").scrollTop = 0;
   });
 
-  $("qa-content").addEventListener("click", event => {
-    const action = event.target.closest("[data-action]");
-    if (action?.dataset.action === "back") goBack();
-  });
-
-  $("qa-content").addEventListener("keydown", event => {
-    if (event.target.id === "qa-input" && event.key === "Enter") {
-      event.preventDefault();
-      askQuestion(event.target.value);
-    }
-  });
-
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
-    if (
-      $("qa-overlay").classList.contains("active") ||
-      $("detail-overlay").classList.contains("active")
-    ) {
+    if ($("detail-overlay").classList.contains("active")) {
       goBack();
     }
   });

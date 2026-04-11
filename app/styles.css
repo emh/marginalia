@@ -99,8 +99,7 @@ header h1 {
   margin-bottom: 28px;
 }
 
-#main-input,
-#qa-input {
+#main-input {
   width: 100%;
   padding: 10px 0;
   border: none;
@@ -114,13 +113,11 @@ header h1 {
   transition: border-color 0.2s;
 }
 
-#main-input:focus,
-#qa-input:focus {
+#main-input:focus {
   border-bottom-color: var(--ink);
 }
 
-#main-input::placeholder,
-#qa-input::placeholder {
+#main-input::placeholder {
   color: var(--ink-faint);
   font-style: italic;
 }
@@ -290,10 +287,6 @@ header h1 {
   transition: transform 0.35s var(--ease), visibility 0s linear 0s;
 }
 
-#qa-overlay {
-  z-index: 200;
-}
-
 .overlay-content {
   max-width: 640px;
   margin: 0 auto;
@@ -431,49 +424,18 @@ header h1 {
   color: var(--ink-mid);
 }
 
+.delete-confirm-label {
+  color: var(--ink-light);
+  font-size: 15px;
+}
+
+.action-link.danger:hover {
+  color: var(--red);
+}
+
 .action-link.done {
   color: var(--ink-light);
   cursor: default;
-}
-
-.qa-header-title {
-  margin-bottom: 4px;
-  color: var(--ink-mid);
-  font-size: 18px;
-  font-style: italic;
-  font-weight: 400;
-}
-
-.qa-subtitle {
-  margin-bottom: 32px;
-  color: var(--ink-light);
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0;
-}
-
-.qa-pair {
-  margin-bottom: 32px;
-}
-
-.qa-question {
-  margin-bottom: 10px;
-  color: var(--ink-light);
-  font-size: 15px;
-  font-style: italic;
-  line-height: 1.5;
-}
-
-.qa-answer {
-  font-size: 16px;
-  line-height: 1.65;
-  white-space: pre-line;
-}
-
-.qa-input-area {
-  padding-top: 20px;
-  margin-top: 32px;
-  border-top: 1px solid var(--rule);
 }
 
 .toast {
