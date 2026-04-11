@@ -8,5 +8,5 @@ services = [
 ]
 
 [vars]
-ALLOWED_ORIGINS = "http://localhost:8000,http://127.0.0.1:8000,http://localhost:8010,http://127.0.0.1:8010,https://emh.github.io"
+ALLOWED_ORIGINS = "http://localhost:8000,http://127.0.0.1:8000,http://localhost:8010,http://127.0.0.1:8010,https://emh.github.io,https://emh.io"
 READER_FALLBACK_URL = "https://r.jina.ai/http://r.jina.ai/http://"
