@@ -9,6 +9,14 @@ const SORTS = [
   { key: "alpha", label: "a to z" }
 ];
 
+const ADD_ARTICLE_STEPS = [
+  "fetching article...",
+  "cleaning article text...",
+  "extracting metadata...",
+  "summarizing...",
+  "indexing..."
+];
+
 const state = {
   ...loadAppState(),
   search: "",
@@ -364,15 +372,16 @@ async function addArticle(url) {
   const input = $("main-input");
   const status = $("input-status");
   const progress = $("input-progress");
+  const stopStatus = startArticleStatus(status);
 
   input.value = "";
   input.disabled = true;
-  status.textContent = "extracting...";
   status.classList.remove("is-error");
   progress.classList.add("running");
 
   try {
     const article = await ingestArticle(url, state.settings);
+    stopStatus("saving...");
     upsertArticle(article);
     save();
     renderAll();
@@ -382,18 +391,14 @@ async function addArticle(url) {
     newElement?.classList.add("animate-in");
     toast("Article added");
   } catch (error) {
+    stopStatus();
     input.value = url;
-    status.textContent = error instanceof Error ? error.message : "Could not add article";
+    renderInputError(status, error);
     status.classList.add("is-error");
     toast("Could not add article");
   } finally {
+    stopStatus();
     progress.classList.remove("running");
-    progress.style.transition = "none";
-    progress.style.width = "0";
-    requestAnimationFrame(() => {
-      progress.style.transition = "";
-      progress.style.width = "";
-    });
     if (didAdd) {
       status.textContent = "";
       status.classList.remove("is-error");
@@ -402,6 +407,57 @@ async function addArticle(url) {
     input.focus();
     isProcessing = false;
   }
+}
+
+function startArticleStatus(status) {
+  let index = 0;
+  let isStopped = false;
+  status.textContent = ADD_ARTICLE_STEPS[index];
+
+  const timer = setInterval(() => {
+    index = (index + 1) % ADD_ARTICLE_STEPS.length;
+    status.textContent = ADD_ARTICLE_STEPS[index];
+  }, 2200);
+
+  return finalMessage => {
+    if (isStopped) return;
+    isStopped = true;
+    clearInterval(timer);
+    if (finalMessage) status.textContent = finalMessage;
+  };
+}
+
+function renderInputError(status, error) {
+  const detail = error instanceof Error ? error.message : "Could not add article";
+  const summary = summaryForError(detail);
+  const expandedDetail = detailForError(detail);
+
+  if (summary === detail) {
+    status.textContent = detail;
+    return;
+  }
+
+  status.innerHTML = `
+    <button class="input-error-summary" type="button" aria-expanded="false">${esc(summary)}</button>
+    <span class="input-error-detail" hidden>${esc(expandedDetail)}</span>
+  `;
+}
+
+function summaryForError(message) {
+  if (
+    /^Article could not be extracted\b/i.test(message) ||
+    /\binternal error;\s*reference\s*=/i.test(message)
+  ) {
+    return "Article could not be extracted";
+  }
+
+  return message;
+}
+
+function detailForError(message) {
+  return message
+    .replace(/^Article could not be extracted:\s*/i, "")
+    .trim();
 }
 
 function upsertArticle(article) {
@@ -434,6 +490,18 @@ function renderAll() {
 function bindEvents() {
   const input = $("main-input");
   const status = $("input-status");
+
+  status.addEventListener("click", event => {
+    const toggle = event.target.closest(".input-error-summary");
+    if (!toggle) return;
+
+    const detail = status.querySelector(".input-error-detail");
+    if (!detail) return;
+
+    const isExpanded = toggle.getAttribute("aria-expanded") === "true";
+    toggle.setAttribute("aria-expanded", String(!isExpanded));
+    detail.hidden = isExpanded;
+  });
 
   input.addEventListener("input", () => {
     const value = input.value.trim();

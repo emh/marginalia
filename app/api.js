@@ -35,7 +35,12 @@ export async function ingestArticle(url, settings = loadSettings()) {
   }
 
   const payload = await response.json();
-  return normalizeArticle(payload.article || payload);
+  const article = normalizeArticle(payload.article || payload);
+  if (isExtractionFailure(article)) {
+    throw new Error(article.error || article.summary || "Article could not be extracted");
+  }
+
+  return article;
 }
 
 function getEndpoint(apiBaseUrl) {
@@ -113,4 +118,12 @@ function hostFromUrl(url) {
 function estimateWords(text) {
   if (!text) return 0;
   return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function isExtractionFailure(article) {
+  return (
+    article.status === "failed" ||
+    article.status === "fetch_failed" ||
+    /metadata could not be extracted/i.test(article.summary)
+  );
 }

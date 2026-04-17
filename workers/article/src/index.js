@@ -140,9 +140,8 @@ async function getArticlePage(articleUrl, env) {
     const readerPage = await fetchReaderFallback(articleUrl, directError, env);
     if (readerPage) return readerPage;
 
-    const fallback = fallbackPage(articleUrl, messageFromError(error));
-    console.warn(`Article fetch failed for ${articleUrl}: ${fallback.fetchError}`);
-    return fallback;
+    console.warn(`Article fetch failed for ${articleUrl}: ${directError}`);
+    throw new Error(`Article could not be extracted: ${directError}`);
   }
 }
 
@@ -271,26 +270,6 @@ function markdownToText(markdown) {
     .replace(/[#>*_`~|-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function fallbackPage(articleUrl, fetchError) {
-  const url = new URL(articleUrl);
-  const source = url.hostname.replace(/^www\./, "");
-  const title = titleFromUrl(url) || `Article from ${source}`;
-
-  return {
-    url: articleUrl,
-    canonicalUrl: articleUrl,
-    source,
-    siteName: source,
-    title,
-    author: "",
-    publishedAt: null,
-    text: `${title}. Article metadata could not be extracted from ${source}.`,
-    wordCount: 0,
-    fetchStatus: "failed",
-    fetchError
-  };
 }
 
 function extractPage(articleUrl, html) {
