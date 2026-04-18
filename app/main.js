@@ -1,5 +1,16 @@
 import { ingestArticle } from "./api.js";
-import { loadAppState, loadSettings, saveAppState } from "./storage.js";
+import {
+  applyMutation,
+  applyMutations,
+  createMutation,
+  createSyntheticMutation,
+  normalizeArticleRecord,
+  normalizeCode,
+  normalizeUserName,
+  visibleArticles
+} from "./model.js";
+import { loadAppState, loadSettings, migrateLegacyForUser, saveAppState } from "./storage.js";
+import { MarginaliaSync, createRemoteLibrary, fetchRemoteLibrary } from "./sync.js";
 
 const SORTS = [
   { key: "newest", label: "newest first" },
@@ -16,12 +27,18 @@ const ADD_ARTICLE_STEPS = [
   "summarizing...",
   "indexing..."
 ];
+const SCREEN_EXIT_MS = 280;
 
+const loadedState = loadAppState();
 const state = {
-  ...loadAppState(),
+  ...loadedState,
   search: "",
   currentArticle: null,
   pendingDeleteId: null,
+  isReadingArticle: false,
+  setupScreen: null,
+  setupPayload: null,
+  syncStatus: "idle",
   settings: loadSettings()
 };
 
@@ -29,6 +46,9 @@ const $ = id => document.getElementById(id);
 
 let isProcessing = false;
 let toastTimer;
+let librarySync = null;
+let renderedSetupKey = "";
+let screenTransitionToken = 0;
 
 function esc(value) {
   const div = document.createElement("div");
@@ -81,6 +101,18 @@ function save() {
   saveAppState(state);
 }
 
+function hasUser() {
+  return Boolean(state.user?.id && state.user?.name);
+}
+
+function currentUserLabel() {
+  return state.user?.name || "";
+}
+
+function getArticles(options = {}) {
+  return options.includeDeleted ? state.articles : visibleArticles(state.articles);
+}
+
 function cosine(left, right) {
   const a = Array.isArray(left) ? left : [];
   const b = Array.isArray(right) ? right : [];
@@ -128,7 +160,7 @@ function hashWord(word) {
 
 function similar(article, count) {
   const target = articleVector(article);
-  return state.articles
+  return getArticles()
     .filter(candidate => candidate.id !== article.id)
     .map(candidate => ({ ...candidate, score: cosine(target, articleVector(candidate)) }))
     .sort((a, b) => b.score - a.score)
@@ -137,28 +169,30 @@ function similar(article, count) {
 
 function similarUnread(article, count) {
   const target = articleVector(article);
-  return state.articles
-    .filter(candidate => candidate.id !== article.id && !candidate.isRead)
+  return getArticles()
+    .filter(candidate => candidate.id !== article.id && !candidate.isArchived)
     .map(candidate => ({ ...candidate, score: cosine(target, articleVector(candidate)) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, count);
 }
 
 function renderStats() {
-  const total = state.articles.length;
-  const read = state.articles.filter(article => article.isRead).length;
-  const minutes = state.articles
-    .filter(article => !article.isRead)
+  const articles = getArticles();
+  const total = articles.length;
+  const read = articles.filter(article => article.isArchived).length;
+  const minutes = articles
+    .filter(article => !article.isArchived)
     .reduce((sum, article) => sum + (article.readingTime || 0), 0);
   const hours = Math.floor(minutes / 60);
   const remaining = hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
 
-  $("stats").textContent = `${total} articles - ${read} read - ${remaining} remaining`;
+  const user = currentUserLabel() ? ` - ${currentUserLabel()}` : "";
+  $("stats").textContent = `${total} articles - ${read} read - ${remaining} remaining${user}`;
   $("progress-fill").style.width = total > 0 ? `${(read / total) * 100}%` : "0%";
 }
 
 function getCategories() {
-  const categories = new Set(state.articles.map(article => article.category || "Other"));
+  const categories = new Set(getArticles().map(article => article.category || "Other"));
   return ["All", ...Array.from(categories).sort()];
 }
 
@@ -173,7 +207,7 @@ function renderSort() {
 }
 
 function getFiltered() {
-  let articles = [...state.articles];
+  let articles = [...getArticles()];
 
   if (state.filter !== "All") {
     articles = articles.filter(article => (article.category || "Other") === state.filter);
@@ -186,6 +220,9 @@ function getFiltered() {
       authorFor(article).toLowerCase().includes(query) ||
       sourceFor(article).toLowerCase().includes(query) ||
       (article.summary || "").toLowerCase().includes(query) ||
+      (article.textContent || "").toLowerCase().includes(query) ||
+      (article.contentMarkdown || "").toLowerCase().includes(query) ||
+      (article.notes || "").toLowerCase().includes(query) ||
       (article.tags || []).some(tag => tag.toLowerCase().includes(query))
     );
   }
@@ -225,9 +262,9 @@ function renderArticles() {
 
   empty.style.display = "none";
   container.innerHTML = articles.map(article => `
-    <article class="article-item${article.isRead ? " is-read" : ""}" data-id="${esc(article.id)}">
+    <article class="article-item${article.isArchived ? " is-read" : ""}" data-id="${esc(article.id)}">
       <div class="article-meta">
-        <span>${esc(sourceFor(article))} - ${article.readingTime || 1} min${article.status === "fetch_failed" ? " - metadata incomplete" : ""}</span>
+        <span>${esc(sourceFor(article))} - ${article.readingTime || 1} min${statusLabel(article)}</span>
         <span>${formatDate(article.dateAdded)}</span>
       </div>
       <h2 class="article-title">${esc(article.title)}</h2>
@@ -237,33 +274,163 @@ function renderArticles() {
 }
 
 function renderDetail(article) {
+  const container = $("detail-content");
+  container.className = "overlay-screen";
+  container.hidden = false;
+
+  if (state.isReadingArticle) {
+    container.innerHTML = articleReaderHtml(article);
+    return;
+  }
+
+  container.innerHTML = articleDetailHtml(article);
+}
+
+function articleDetailHtml(article) {
   const related = similar(article, 3);
-  $("detail-content").innerHTML = `
-    <button class="back-btn" data-action="back" type="button">Back</button>
+  return `
+    ${overlayHeaderHtml("back")}
 
-    <h1 class="detail-title">${esc(article.title)}</h1>
-    <p class="detail-byline">${esc(authorFor(article))}</p>
-    <p class="detail-pub">${esc(sourceFor(article))} - ${article.readingTime || 1} min read - ${formatDate(article.publishedAt || article.dateAdded)}</p>
+    <div class="overlay-content has-fixed-header has-fixed-footer">
+      <h1 class="detail-title">${esc(article.title)}</h1>
+      <p class="detail-byline">${esc(authorFor(article))}</p>
+      <p class="detail-pub">${esc(sourceFor(article))} - ${article.readingTime || 1} min read - ${formatDate(article.publishedAt || article.dateAdded)}</p>
 
-    <p class="detail-summary">${esc(article.summary)}</p>
-    ${article.status === "fetch_failed" ? `<p class="detail-summary">${esc("Metadata extraction failed. The original link is still in your library.")}</p>` : ""}
-    <p class="detail-tags">${(article.tags || []).map(tag => esc(tag)).join(" - ")}</p>
+      <p class="detail-summary">${esc(article.summary)}</p>
+      ${renderArticleNotice(article)}
+      <p class="detail-tags">${(article.tags || []).map(tag => esc(tag)).join(" - ")}</p>
 
-    <hr class="detail-rule">
+      <hr class="detail-rule">
 
-    <div class="section-label">Related</div>
-    ${related.map(candidate => renderRelated(candidate)).join("")}
+      <div class="section-label">Related</div>
+      ${related.map(candidate => renderRelated(candidate)).join("")}
 
-    <hr class="detail-rule">
-
-    <div class="detail-actions">
-      <button class="action-link" data-action="toggle-read" type="button">${article.isRead ? "Read" : "Mark as read"}</button>
-      <a class="action-link muted" href="${esc(article.url)}" target="_blank" rel="noopener">Open</a>
-      ${renderDeleteAction(article)}
+      ${article.isArchived ? renderReadNext(article) : ""}
     </div>
 
-    ${article.isRead ? renderReadNext(article) : ""}
+    ${overlayFooterHtml(`
+      <div class="detail-actions">
+        ${renderReadArticleAction(article)}
+        <a class="action-link muted" href="${esc(article.finalUrl || article.canonicalUrl || article.url)}" target="_blank" rel="noopener">Open</a>
+        <button class="action-link" data-action="toggle-read" type="button">${article.isArchived ? "Mark unread" : "Mark as read"}</button>
+        ${renderDeleteAction(article)}
+      </div>
+    `)}
   `;
+}
+
+function overlayHeaderHtml(action) {
+  return `
+    <div class="overlay-fixed-header">
+      <div class="overlay-fixed-inner">
+        <button class="back-btn" data-action="${esc(action)}" type="button">Back</button>
+      </div>
+    </div>
+  `;
+}
+
+function overlayFooterHtml(content) {
+  return `
+    <div class="overlay-fixed-footer">
+      <div class="overlay-fixed-inner">
+        ${content}
+      </div>
+    </div>
+  `;
+}
+
+function statusLabel(article) {
+  if (article.status === "fetch_failed" || hasMetadataError(article)) return " - metadata incomplete";
+  return "";
+}
+
+function renderArticleNotice(article) {
+  if (article.status === "fetch_failed") {
+    return `<p class="detail-summary">${esc("Metadata extraction failed. The original link is still in your library.")}</p>`;
+  }
+
+  if (hasMetadataError(article)) {
+    return `<p class="detail-summary">${esc("Metadata enrichment failed. The article text was saved with fallback details.")}</p>`;
+  }
+
+  return "";
+}
+
+function hasMetadataError(article) {
+  return article.status === "metadata_failed" || /\bmetadata unavailable\b|\bmetadata worker failed\b/i.test(article.error || "");
+}
+
+function renderReadArticleAction(article) {
+  if (!hasArticleBody(article)) return "";
+  return `<button class="action-link" data-action="read-article" type="button">Read</button>`;
+}
+
+function hasArticleBody(article) {
+  return Boolean(String(article.contentMarkdown || article.textContent || "").trim());
+}
+
+function articleReaderHtml(article) {
+  return `
+    ${overlayHeaderHtml("back-to-detail")}
+
+    <div class="overlay-content has-fixed-header">
+      <h1 class="detail-title reader-title">${esc(article.title)}</h1>
+      ${renderArticleBody(article)}
+    </div>
+  `;
+}
+
+function renderArticleBody(article) {
+  const markdown = String(article.contentMarkdown || article.textContent || "").trim();
+  if (!markdown) {
+    return `<p class="detail-summary">No readable text was extracted.</p>`;
+  }
+
+  const blocks = markdown
+    .split(/\n{2,}/)
+    .map(block => block.trim())
+    .filter(Boolean);
+
+  if (!blocks.length) return "";
+
+  return `
+    <div class="article-body">
+      ${blocks.map(renderMarkdownBlock).join("")}
+    </div>
+  `;
+}
+
+function renderMarkdownBlock(block) {
+  const heading = block.match(/^(#{1,6})\s+(.+)$/);
+  if (heading) {
+    const level = Math.min(4, Math.max(2, heading[1].length + 1));
+    return `<h${level}>${esc(heading[2])}</h${level}>`;
+  }
+
+  if (/^[-*]\s+/m.test(block)) {
+    const items = block
+      .split(/\n/)
+      .map(line => line.replace(/^[-*]\s+/, "").trim())
+      .filter(Boolean)
+      .map(item => `<li>${esc(stripMarkdown(item))}</li>`)
+      .join("");
+    return `<ul>${items}</ul>`;
+  }
+
+  if (/^>\s+/m.test(block)) {
+    return `<blockquote>${esc(stripMarkdown(block.replace(/^>\s+/gm, "")))}</blockquote>`;
+  }
+
+  return `<p>${esc(stripMarkdown(block))}</p>`;
+}
+
+function stripMarkdown(value) {
+  return String(value || "")
+    .replace(/!\[[^\]]*]\([^)]+\)/g, "")
+    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
+    .replace(/[*_`~]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function renderRelated(article) {
@@ -300,11 +467,12 @@ function renderReadNext(article) {
 }
 
 function showDetail(id) {
-  const article = state.articles.find(candidate => candidate.id === id);
+  const article = getArticles().find(candidate => candidate.id === id);
   if (!article) return;
 
   state.currentArticle = article;
   state.pendingDeleteId = null;
+  state.isReadingArticle = false;
   renderDetail(article);
   $("detail-overlay").classList.add("active");
   $("detail-overlay").scrollTop = 0;
@@ -313,25 +481,82 @@ function showDetail(id) {
 
 function goBack() {
   if ($("detail-overlay").classList.contains("active")) {
+    if (state.isReadingArticle && state.currentArticle) {
+      transitionArticleScreen(false, "back");
+      return;
+    }
+
     $("detail-overlay").classList.remove("active");
     document.body.classList.remove("no-scroll");
     state.pendingDeleteId = null;
+    state.isReadingArticle = false;
     renderAll();
   }
 }
 
+function showArticleReader() {
+  if (!state.currentArticle || !hasArticleBody(state.currentArticle)) return;
+  state.pendingDeleteId = null;
+  transitionArticleScreen(true, "forward");
+}
+
+function backToArticleDetail() {
+  if (!state.currentArticle) return goBack();
+  transitionArticleScreen(false, "back");
+}
+
+function transitionArticleScreen(nextIsReading, direction) {
+  if (!state.currentArticle) return;
+  if (state.isReadingArticle === nextIsReading) return;
+
+  const container = $("detail-content");
+  const overlay = $("detail-overlay");
+  const token = ++screenTransitionToken;
+  const isBack = direction === "back";
+  const scrollTop = overlay.scrollTop;
+  const currentHtml = container.innerHTML;
+  const nextHtml = nextIsReading
+    ? articleReaderHtml(state.currentArticle)
+    : articleDetailHtml(state.currentArticle);
+
+  const stage = document.createElement("div");
+  stage.className = `screen-transition ${isBack ? "is-back" : "is-forward"}`;
+  stage.innerHTML = `
+    <div class="screen-pane screen-pane-current">
+      ${currentHtml}
+    </div>
+    <div class="screen-pane screen-pane-next">
+      ${nextHtml}
+    </div>
+  `;
+
+  overlay.classList.add("is-screen-transitioning");
+  container.hidden = true;
+  overlay.append(stage);
+  stage.querySelector(".screen-pane-current").scrollTop = scrollTop;
+
+  setTimeout(() => {
+    if (token !== screenTransitionToken) return;
+
+    state.isReadingArticle = nextIsReading;
+    renderDetail(state.currentArticle);
+    overlay.scrollTop = 0;
+    overlay.classList.remove("is-screen-transitioning");
+    stage.remove();
+  }, SCREEN_EXIT_MS);
+}
+
 function toggleRead(id) {
-  const article = state.articles.find(candidate => candidate.id === id);
+  const article = getArticles().find(candidate => candidate.id === id);
   if (!article) return;
 
-  article.isRead = !article.isRead;
-  if (article.isRead) article.dateRead = new Date().toISOString();
-  else delete article.dateRead;
-
-  save();
-  renderDetail(article);
-  renderStats();
-  toast(article.isRead ? "Marked as read" : "Marked as unread");
+  const nextArchived = !article.isArchived;
+  commitChanges([{
+    entityType: "article",
+    entityId: article.id,
+    field: "isArchived",
+    value: nextArchived
+  }], nextArchived ? "Marked as read" : "Marked as unread");
 }
 
 function requestDeleteCurrentArticle() {
@@ -350,13 +575,17 @@ function deleteCurrentArticle() {
   if (!state.currentArticle) return;
 
   const articleId = state.currentArticle.id;
-  const index = state.articles.findIndex(candidate => candidate.id === articleId);
-  if (index < 0) return;
+  if (!getArticles().some(candidate => candidate.id === articleId)) return;
 
-  state.articles.splice(index, 1);
+  commitChanges([{
+    entityType: "article",
+    entityId: articleId,
+    field: "deleted",
+    value: true
+  }]);
   state.currentArticle = null;
   state.pendingDeleteId = null;
-  save();
+  state.isReadingArticle = false;
 
   $("detail-overlay").classList.remove("active");
   document.body.classList.remove("no-scroll");
@@ -365,6 +594,11 @@ function deleteCurrentArticle() {
 }
 
 async function addArticle(url) {
+  if (!hasUser()) {
+    showNamePrompt();
+    return;
+  }
+
   if (isProcessing) return;
   isProcessing = true;
   let didAdd = false;
@@ -382,14 +616,13 @@ async function addArticle(url) {
   try {
     const article = await ingestArticle(url, state.settings);
     stopStatus("saving...");
-    upsertArticle(article);
-    save();
-    renderAll();
+    const result = upsertArticle(article);
+    const savedArticle = result.article;
     didAdd = true;
 
-    const newElement = document.querySelector(`[data-id="${CSS.escape(article.id)}"]`);
-    newElement?.classList.add("animate-in");
-    toast("Article added");
+    const newElement = document.querySelector(`[data-id="${CSS.escape(savedArticle.id)}"]`);
+    if (result.added) newElement?.classList.add("animate-in");
+    toast(result.added ? "Article added" : "Article already saved");
   } catch (error) {
     stopStatus();
     input.value = url;
@@ -431,14 +664,19 @@ function renderInputError(status, error) {
   const detail = error instanceof Error ? error.message : "Could not add article";
   const summary = summaryForError(detail);
   const expandedDetail = detailForError(detail);
+  const copyDetail = expandedDetail || detail;
 
   if (summary === detail) {
-    status.textContent = detail;
+    status.innerHTML = `
+      <span class="input-error-detail">${esc(copyDetail)}</span>
+      <button class="input-error-copy" data-error="${esc(copyDetail)}" type="button">copy error</button>
+    `;
     return;
   }
 
   status.innerHTML = `
     <button class="input-error-summary" type="button" aria-expanded="false">${esc(summary)}</button>
+    <button class="input-error-copy" data-error="${esc(copyDetail)}" type="button">copy error</button>
     <span class="input-error-detail" hidden>${esc(expandedDetail)}</span>
   `;
 }
@@ -461,37 +699,368 @@ function detailForError(message) {
 }
 
 function upsertArticle(article) {
-  const existingIndex = state.articles.findIndex(candidate =>
-    candidate.canonicalUrl === article.canonicalUrl || candidate.url === article.url
+  const existing = getArticles({ includeDeleted: true }).find(candidate =>
+    sameArticle(candidate, article)
   );
 
-  if (existingIndex >= 0) {
-    const existing = state.articles[existingIndex];
-    state.articles[existingIndex] = {
-      ...existing,
-      ...article,
-      id: existing.id,
-      dateAdded: existing.dateAdded,
-      isRead: existing.isRead
-    };
-    return;
+  if (existing && !existing.deleted) {
+    renderAll();
+    return { article: existing, added: false };
   }
 
-  state.articles.unshift(article);
+  const next = normalizeArticleRecord({
+    ...article,
+    id: existing?.id || article.id,
+    addedByUserId: state.user.id,
+    addedByName: state.user.name,
+    deleted: false
+  });
+  commitChanges([{ entityType: "article", entityId: next.id, field: "_create", value: next }]);
+  return {
+    article: getArticles({ includeDeleted: true }).find(candidate => candidate.id === next.id) || next,
+    added: true
+  };
+}
+
+function sameArticle(left, right) {
+  const leftUrls = articleUrlKeys(left);
+  return Array.from(articleUrlKeys(right)).some(url => leftUrls.has(url));
+}
+
+function articleUrlKeys(article) {
+  return new Set([
+    article.requestedUrl,
+    article.finalUrl,
+    article.canonicalUrl,
+    article.url
+  ].filter(Boolean));
+}
+
+function commitChanges(changes, message) {
+  if (!hasUser()) {
+    showNamePrompt();
+    return [];
+  }
+
+  const mutations = changes.map(change => createMutation(state, change.entityType, change.entityId, change.field, change.value));
+  for (const mutation of mutations) {
+    applyMutation(state, mutation);
+    state.sync.mutationQueue.push(mutation);
+  }
+
+  save();
+  flushSync();
+  renderAll();
+  refreshCurrentArticle();
+  if (message) toast(message);
+  return mutations;
+}
+
+function flushSync() {
+  librarySync?.flush();
+}
+
+function refreshCurrentArticle() {
+  if (!$("detail-overlay").classList.contains("active") || !state.currentArticle) return;
+  const article = getArticles().find(candidate => candidate.id === state.currentArticle.id);
+  if (!article) return;
+  state.currentArticle = article;
+  renderDetail(article);
 }
 
 function renderAll() {
+  renderSetupScreen();
+  renderSyncIndicator();
+  if (!hasUser()) return;
   renderStats();
   renderCategories();
   renderSort();
   renderArticles();
 }
 
+function renderSetupScreen() {
+  const screen = $("setup-screen");
+  const content = $("setup-content");
+  if (!screen || !content) return;
+
+  const active = !hasUser() || Boolean(state.setupScreen);
+  screen.classList.toggle("active", active);
+  document.body.classList.toggle("no-scroll", active || $("detail-overlay").classList.contains("active"));
+  if (!active) {
+    renderedSetupKey = "";
+    return;
+  }
+
+  if (!hasUser()) {
+    setSetupContent(renderNamePrompt(), "name", () => $("setup-name")?.focus());
+    return;
+  }
+
+  if (state.setupScreen === "library-share") {
+    const code = state.setupPayload?.code || state.user.profileCode;
+    const url = libraryLink(code);
+    setSetupContent(`
+      <button class="back-btn" data-action="close-setup" type="button">back</button>
+      <h1>link library</h1>
+      <p class="setup-copy">Open this on another device.</p>
+      <input class="share-field" id="library-share-url" value="${esc(url)}" readonly>
+      <div class="setup-code" id="library-share-code">${esc(code)}</div>
+      <div class="detail-actions">
+        <button class="action-link" data-action="share-library-url" type="button">share url</button>
+        <button class="action-link" data-action="copy-library-url" type="button">copy url</button>
+        <button class="action-link muted" data-action="copy-library-code" type="button">copy code</button>
+      </div>
+    `, `library-share:${code}`);
+  }
+}
+
+function setSetupContent(html, key, afterRender) {
+  const content = $("setup-content");
+  if (!content) return;
+  const changed = renderedSetupKey !== key;
+  if (changed) {
+    content.innerHTML = html;
+    renderedSetupKey = key;
+    content.classList.remove("screen-enter");
+    requestAnimationFrame(() => content.classList.add("screen-enter"));
+  }
+  if (afterRender) requestAnimationFrame(afterRender);
+}
+
+function renderNamePrompt() {
+  return `
+    <h1>marginalia</h1>
+    <p class="setup-copy">Pick a name before saving articles.</p>
+    <label class="field">
+      <span>Your name</span>
+      <input id="setup-name" autocomplete="name" spellcheck="false">
+    </label>
+    <div class="detail-actions">
+      <button class="action-link" data-action="save-name" type="button">continue</button>
+    </div>
+  `;
+}
+
+function showNamePrompt() {
+  state.setupScreen = "name";
+  state.setupPayload = null;
+  renderAll();
+}
+
+function completeNameSetup() {
+  const name = normalizeUserName($("setup-name")?.value);
+  if (!name) {
+    toast("Name required");
+    return;
+  }
+
+  migrateLegacyForUser(state, name);
+  state.setupScreen = null;
+  state.setupPayload = null;
+  save();
+  configureSync();
+  renderAll();
+}
+
+async function showLibraryLink() {
+  if (!hasUser()) return showNamePrompt();
+  const code = await ensureLibraryCode();
+  state.setupScreen = "library-share";
+  state.setupPayload = { code };
+  renderAll();
+}
+
+async function ensureLibraryCode() {
+  if (state.user?.profileCode) return state.user.profileCode;
+  const payload = await createRemoteLibrary({
+    user: state.user,
+    mutations: state.sync.mutationQueue
+  }, state.settings);
+  applyRemotePayload(payload);
+  state.user.profileCode = payload.code;
+  if (Array.isArray(payload.confirmedIds)) {
+    const confirmed = new Set(payload.confirmedIds);
+    state.sync.mutationQueue = state.sync.mutationQueue.filter(mutation => !confirmed.has(mutation.id));
+  }
+  save();
+  configureSync();
+  return state.user.profileCode;
+}
+
+async function linkLibrary(code) {
+  const payload = await fetchRemoteLibrary(code, state.settings);
+  applyRemotePayload(payload);
+  state.user = {
+    ...payload.user,
+    profileCode: payload.code
+  };
+  state.sync.mutationQueue = [];
+  state.sync.lastSyncTimestamp = payload.highWatermark || "";
+  stripLibraryQuery();
+  save();
+  configureSync();
+  state.setupScreen = null;
+  state.setupPayload = null;
+  renderAll();
+  toast("Library linked");
+}
+
+function applyRemotePayload(payload) {
+  if (payload?.user) {
+    state.user = {
+      ...payload.user,
+      profileCode: payload.user.profileCode || payload.code || state.user?.profileCode || ""
+    };
+  }
+
+  if (Array.isArray(payload?.mutations)) {
+    applyMutations(state, payload.mutations);
+  } else {
+    mergeMaterializedPayload(payload);
+  }
+
+  if (payload?.highWatermark) {
+    state.sync.lastSyncTimestamp = payload.highWatermark;
+  }
+}
+
+function mergeMaterializedPayload(payload = {}) {
+  const synthetic = [];
+  for (const article of payload.articles || []) {
+    synthetic.push(createSyntheticMutation("article", article.id, "_create", article, state));
+  }
+  applyMutations(state, synthetic);
+}
+
+function libraryLink(code) {
+  const url = new URL(globalThis.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("library", code);
+  return url.toString();
+}
+
+function stripLibraryQuery() {
+  const url = new URL(globalThis.location.href);
+  if (!url.searchParams.has("library")) return;
+  url.searchParams.delete("library");
+  history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+async function copyText(value, message) {
+  await navigator.clipboard?.writeText(value);
+  toast(message);
+}
+
+async function shareText(title, url, fallbackMessage) {
+  if (navigator.share) {
+    await navigator.share({ title, url });
+  } else {
+    await copyText(url, fallbackMessage);
+  }
+}
+
+function renderSyncIndicator() {
+  const dot = $("sync-dot");
+  if (!dot) return;
+  const pending = state.sync?.mutationQueue?.length > 0;
+  const synced = Boolean(state.user?.profileCode && !pending && state.syncStatus !== "syncing");
+  dot.classList.toggle("synced", synced);
+  dot.classList.toggle("unsynced", !synced);
+  dot.setAttribute("aria-label", synced ? "synced" : "not synced");
+  dot.title = synced ? "synced" : "not synced";
+}
+
+function configureSync() {
+  if (!hasUser() || !state.user.profileCode) {
+    librarySync?.stop();
+    librarySync = null;
+    state.syncStatus = hasUser() ? "pending" : "idle";
+    return;
+  }
+
+  if (librarySync && librarySync.code === state.user.profileCode) return;
+
+  librarySync?.stop();
+  librarySync = new MarginaliaSync({
+    code: state.user.profileCode,
+    state,
+    save,
+    onStatus(status) {
+      state.syncStatus = status;
+      renderSyncIndicator();
+    },
+    onChange() {
+      save();
+      renderAll();
+      refreshCurrentArticle();
+    },
+    onRoom(room) {
+      if (room?.code && state.user) {
+        state.user.profileCode = room.code;
+        save();
+      }
+    }
+  });
+  librarySync.start();
+}
+
+function handleLibraryQuery() {
+  const params = new URLSearchParams(globalThis.location.search);
+  const code = normalizeCode(params.get("library"));
+  if (code) runAction(() => linkLibrary(code));
+}
+
+function closeSetup() {
+  state.setupScreen = null;
+  state.setupPayload = null;
+  stripLibraryQuery();
+  renderAll();
+}
+
+function runAction(fn) {
+  Promise.resolve(fn()).catch(error => {
+    toast(error instanceof Error ? error.message : String(error));
+  });
+}
+
 function bindEvents() {
   const input = $("main-input");
   const status = $("input-status");
 
+  $("link-library-btn")?.addEventListener("click", () => runAction(showLibraryLink));
+
+  $("setup-content")?.addEventListener("click", event => {
+    const action = event.target.closest("[data-action]");
+    if (!action) return;
+
+    runAction(async () => {
+      if (action.dataset.action === "save-name") return completeNameSetup();
+      if (action.dataset.action === "close-setup") return closeSetup();
+      if (action.dataset.action === "copy-library-url") return copyText($("library-share-url")?.value || "", "url copied");
+      if (action.dataset.action === "copy-library-code") return copyText($("library-share-code")?.textContent || "", "code copied");
+      if (action.dataset.action === "share-library-url") return shareText("link marginalia library", $("library-share-url")?.value || "", "url copied");
+    });
+  });
+
+  $("setup-content")?.addEventListener("keydown", event => {
+    if (event.key !== "Enter") return;
+    if (event.target?.id === "setup-name") {
+      event.preventDefault();
+      completeNameSetup();
+    }
+  });
+
   status.addEventListener("click", event => {
+    const copy = event.target.closest(".input-error-copy");
+    if (copy) {
+      const text = copy.dataset.error || status.querySelector(".input-error-detail")?.textContent || "";
+      if (text) {
+        navigator.clipboard?.writeText(text).then(() => toast("Error copied")).catch(() => {});
+      }
+      return;
+    }
+
     const toggle = event.target.closest(".input-error-summary");
     if (!toggle) return;
 
@@ -561,6 +1130,8 @@ function bindEvents() {
     const action = event.target.closest("[data-action]");
     if (action) {
       if (action.dataset.action === "back") return goBack();
+      if (action.dataset.action === "back-to-detail") return backToArticleDetail();
+      if (action.dataset.action === "read-article") return showArticleReader();
       if (action.dataset.action === "toggle-read") return toggleRead(state.currentArticle.id);
       if (action.dataset.action === "request-delete") return requestDeleteCurrentArticle();
       if (action.dataset.action === "confirm-delete") return deleteCurrentArticle();
@@ -569,10 +1140,11 @@ function bindEvents() {
 
     const related = event.target.closest(".related-item");
     if (!related) return;
-    const article = state.articles.find(candidate => candidate.id === related.dataset.id);
+    const article = getArticles().find(candidate => candidate.id === related.dataset.id);
     if (!article) return;
     state.currentArticle = article;
     state.pendingDeleteId = null;
+    state.isReadingArticle = false;
     renderDetail(article);
     $("detail-overlay").scrollTop = 0;
   });
@@ -586,8 +1158,10 @@ function bindEvents() {
 }
 
 function init() {
-  renderAll();
   bindEvents();
+  handleLibraryQuery();
+  configureSync();
+  renderAll();
   registerServiceWorker();
   watchForAppUpdates();
 }

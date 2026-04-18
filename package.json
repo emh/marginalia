@@ -3,14 +3,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n web,metadata,article -c auto \"npm:dev:web\" \"npm:dev:worker:metadata\" \"npm:dev:worker:article\"",
+    "dev": "concurrently -n web,metadata,article,sync -c auto \"npm:dev:web\" \"npm:dev:worker:metadata\" \"npm:dev:worker:article\" \"npm:dev:worker:sync\"",
     "dev:web": "wds --root-dir app --watch --app-index index.html --hostname 127.0.0.1 --port 8010",
     "dev:worker:article": "WRANGLER_LOG_PATH=../../.wrangler/logs wrangler dev --cwd workers/article --config wrangler.toml --ip 127.0.0.1 --port 8787 --inspector-ip 127.0.0.1 --inspector-port 9230 --persist-to ../../.wrangler/state/article",
     "dev:worker:metadata": "WRANGLER_LOG_PATH=../../.wrangler/logs wrangler dev --cwd workers/metadata --config wrangler.toml --ip 127.0.0.1 --port 8788 --inspector-ip 127.0.0.1 --inspector-port 9231 --persist-to ../../.wrangler/state/metadata",
+    "dev:worker:sync": "WRANGLER_LOG_PATH=../../.wrangler/logs wrangler dev --cwd workers/sync --config wrangler.toml --ip 127.0.0.1 --port 8789 --inspector-ip 127.0.0.1 --inspector-port 9232 --persist-to ../../.wrangler/state/sync",
     "deploy:worker:metadata": "wrangler deploy --config workers/metadata/wrangler.toml",
     "deploy:worker:article": "wrangler deploy --config workers/article/wrangler.toml",
-    "deploy:workers": "npm run deploy:worker:metadata && npm run deploy:worker:article",
-    "check": "node --check app/config.js && node --check app/version.js && node --check app/sw.js && node --check app/main.js && node --check app/api.js && node --check app/storage.js && node -e \"JSON.parse(require('node:fs').readFileSync('app/manifest.webmanifest', 'utf8'))\" && node --check workers/article/src/index.js && node --check workers/metadata/src/index.js"
+    "deploy:worker:sync": "wrangler deploy --config workers/sync/wrangler.toml",
+    "deploy:workers": "npm run deploy:worker:metadata && npm run deploy:worker:article && npm run deploy:worker:sync",
+    "check": "node --check app/config.js && node --check app/version.js && node --check app/sw.js && node --check app/model.js && node --check app/main.js && node --check app/api.js && node --check app/storage.js && node --check app/sync.js && node -e \"JSON.parse(require('node:fs').readFileSync('app/manifest.webmanifest', 'utf8'))\" && node --check workers/article/src/index.js && node --check workers/metadata/src/index.js && node --check workers/sync/src/index.js",
+    "test": "node --test"
   },
   "devDependencies": {
     "@web/dev-server": "^0.4.6",

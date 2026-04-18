@@ -1,5 +1,4 @@
 const MAX_ARTICLE_BYTES = 2_000_000;
-const MAX_TEXT_CHARS = 40_000;
 
 export default {
   async fetch(request, env) {
@@ -12,7 +11,7 @@ export default {
     try {
       const url = new URL(request.url);
 
-      if (request.method !== "POST" || url.pathname !== "/api/articles") {
+      if (request.method !== "POST" || !["/api/articles", "/api/extract"].includes(url.pathname)) {
         return json({ error: "Not found" }, 404, cors);
       }
 
@@ -23,7 +22,7 @@ export default {
       const body = await request.json();
       const articleUrl = normalizeArticleUrl(body.url);
       const page = await getArticlePage(articleUrl, env);
-      const metadata = await askMetadataWorker(page, env);
+      const metadata = await getArticleMetadata(page, env);
       const article = buildArticle(page, metadata);
 
       return json({ article }, 200, cors);
@@ -129,7 +128,7 @@ async function fetchArticlePage(articleUrl) {
     throw new Error("Article is too large");
   }
 
-  return extractPage(articleUrl, html);
+  return extractPage(response.url || articleUrl, html, articleUrl);
 }
 
 async function getArticlePage(articleUrl, env) {
@@ -165,8 +164,11 @@ async function fetchReaderFallback(articleUrl, directError, env) {
     if (!markdown.trim()) {
       throw new Error("Reader fallback returned no content");
     }
+    if (markdown.length > MAX_ARTICLE_BYTES) {
+      throw new Error("Reader fallback article is too large");
+    }
 
-    const page = extractReaderPage(articleUrl, markdown.slice(0, MAX_TEXT_CHARS));
+    const page = extractReaderPage(articleUrl, markdown);
     page.fetchStatus = "reader_fallback";
     page.fetchError = directError;
     console.warn(`Used reader fallback for ${articleUrl}: ${directError}`);
@@ -194,16 +196,25 @@ function extractReaderPage(articleUrl, markdown) {
     .replace(/^Published Time:.*$/im, "")
     .replace(/^Markdown Content:\s*$/im, "")
     .trim();
-  const text = markdownToText(cleanReaderContent(content));
+  const contentMarkdown = cleanReaderContent(content);
+  const text = markdownToText(contentMarkdown);
 
   return {
+    requestedUrl: articleUrl,
+    finalUrl: sourceUrl,
     url: articleUrl,
     canonicalUrl: sourceUrl,
+    sourceHost: source,
     source,
     siteName: source,
     title,
+    byline: author,
     author,
     publishedAt,
+    lang: "",
+    contentMarkdown,
+    textContent: text,
+    headings: headingsFromMarkdown(contentMarkdown),
     text,
     wordCount: countWords(text)
   };
@@ -272,28 +283,130 @@ function markdownToText(markdown) {
     .trim();
 }
 
-function extractPage(articleUrl, html) {
-  const url = new URL(articleUrl);
+function extractPage(finalUrl, html, requestedUrl = finalUrl) {
+  const url = new URL(finalUrl);
   const source = url.hostname.replace(/^www\./, "");
   const title = getMeta(html, ["og:title", "twitter:title"]) || getTitle(html) || titleFromUrl(url);
   const siteName = getMeta(html, ["og:site_name", "application-name"]) || source;
   const author = getMeta(html, ["author", "article:author", "parsely-author"]) || "";
   const publishedAt = getMeta(html, ["article:published_time", "date", "dc.date", "pubdate"]) || null;
-  const canonicalUrl = getCanonicalUrl(html, url) || articleUrl;
-  const text = htmlToText(html).slice(0, MAX_TEXT_CHARS);
-  const wordCount = countWords(text);
+  const canonicalUrl = getCanonicalUrl(html, url) || finalUrl;
+  const contentHtml = getMainContentHtml(html);
+  const rawMarkdown = htmlToMarkdown(contentHtml, url);
+  const rawText = markdownToText(rawMarkdown || htmlToText(html));
+  const contentMarkdown = rawMarkdown;
+  const text = rawText;
+  const wordCount = countWords(rawText || text);
 
   return {
-    url: articleUrl,
+    requestedUrl,
+    finalUrl,
+    url: requestedUrl,
     canonicalUrl,
+    sourceHost: source,
     source,
     siteName,
     title,
+    byline: author,
     author,
     publishedAt,
+    lang: getLang(html),
+    contentMarkdown,
+    textContent: text,
+    headings: getHeadings(contentHtml),
     text,
     wordCount
   };
+}
+
+function getMainContentHtml(html) {
+  const article = html.match(/<article\b[^>]*>([\s\S]*?)<\/article>/i);
+  const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i);
+  const body = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  return (article?.[1] || main?.[1] || body?.[1] || html)
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+    .replace(/<(?:nav|header|footer|aside|form)\b[\s\S]*?<\/(?:nav|header|footer|aside|form)>/gi, " ");
+}
+
+function htmlToMarkdown(html, baseUrl) {
+  let value = String(html || "");
+
+  value = value
+    .replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (_, level, content) => `\n\n${"#".repeat(Number(level))} ${inlineText(content, baseUrl)}\n\n`)
+    .replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, content) => `\n\n> ${inlineText(content, baseUrl)}\n\n`)
+    .replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_, content) => `\n- ${inlineText(content, baseUrl)}`)
+    .replace(/<\/(?:ul|ol)>/gi, "\n\n")
+    .replace(/<p\b[^>]*>([\s\S]*?)<\/p>/gi, (_, content) => `\n\n${inlineText(content, baseUrl)}\n\n`)
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:div|section)>/gi, "\n\n")
+    .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href, content) => {
+      const text = inlineText(content, baseUrl);
+      if (!text) return "";
+      try {
+        return `[${text}](${new URL(decodeEntities(href), baseUrl).toString()})`;
+      } catch {
+        return text;
+      }
+    })
+    .replace(/<img\b[^>]*alt=["']([^"']*)["'][^>]*>/gi, (_, alt) => alt ? ` ${decodeEntities(alt)} ` : " ")
+    .replace(/<[^>]+>/g, " ");
+
+  return cleanMarkdown(decodeEntities(value));
+}
+
+function inlineText(html, baseUrl) {
+  return cleanMarkdown(decodeEntities(String(html || "")
+    .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href, content) => {
+      const text = inlineText(content, baseUrl);
+      if (!text) return "";
+      try {
+        return `[${text}](${new URL(decodeEntities(href), baseUrl).toString()})`;
+      } catch {
+        return text;
+      }
+    })
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")));
+}
+
+function cleanMarkdown(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map(line => line.replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function getHeadings(html) {
+  const headings = [];
+  const pattern = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi;
+  let match;
+  while ((match = pattern.exec(html)) && headings.length < 64) {
+    const text = inlineText(match[2]).replace(/^#+\s*/, "").trim();
+    if (text) headings.push({ level: Number(match[1]), text });
+  }
+  return headings;
+}
+
+function headingsFromMarkdown(markdown) {
+  return String(markdown || "")
+    .split(/\r?\n/)
+    .map(line => line.match(/^(#{1,6})\s+(.+)$/))
+    .filter(Boolean)
+    .map(match => ({ level: match[1].length, text: match[2].trim() }))
+    .slice(0, 64);
+}
+
+function getLang(html) {
+  const htmlLang = html.match(/<html\b[^>]*\blang=["']([^"']+)["']/i)?.[1];
+  const metaLang = getMeta(html, ["language", "og:locale"]);
+  return (htmlLang || metaLang || "").trim();
 }
 
 async function askMetadataWorker(page, env) {
@@ -340,6 +453,16 @@ async function askMetadataWorker(page, env) {
   throw new Error("Metadata Worker is not configured");
 }
 
+async function getArticleMetadata(page, env) {
+  try {
+    return await askMetadataWorker(page, env);
+  } catch (error) {
+    const message = messageFromError(error);
+    console.warn(`Metadata extraction failed for ${page.url || page.requestedUrl}: ${message}`);
+    return heuristicMetadata(page, message);
+  }
+}
+
 async function responseError(response, fallback) {
   try {
     const payload = await response.json();
@@ -355,26 +478,54 @@ async function responseError(response, fallback) {
 
 function buildArticle(page, metadata) {
   const wordCount = metadata.wordCount || page.wordCount || countWords(page.text);
+  const requestedUrl = page.requestedUrl || page.url;
+  const finalUrl = metadata.finalUrl || page.finalUrl || page.url;
+  const canonicalUrl = metadata.canonicalUrl || page.canonicalUrl || finalUrl || requestedUrl;
+  const sourceHost = metadata.sourceHost || metadata.source || page.sourceHost || page.source || hostFromUrl(canonicalUrl || finalUrl || requestedUrl);
+  const byline = metadata.byline || metadata.author || page.byline || page.author || "Unknown";
+  const excerpt = metadata.excerpt || metadata.summary || summarize(page.text);
+  const capturedAt = new Date().toISOString();
 
-  return {
+  const article = {
     id: crypto.randomUUID(),
-    url: page.url,
-    canonicalUrl: metadata.canonicalUrl || page.canonicalUrl || page.url,
+    requestedUrl,
+    finalUrl,
+    canonicalUrl,
+    sourceHost,
     title: metadata.title || page.title,
-    source: metadata.source || page.source,
     siteName: metadata.publisher || metadata.siteName || page.siteName || page.source,
-    author: metadata.author || page.author || "Unknown",
+    byline,
     publishedAt: metadata.publishedAt || page.publishedAt || null,
-    dateAdded: new Date().toISOString(),
+    capturedAt,
+    lang: metadata.lang || page.lang || "",
+    contentMarkdown: page.contentMarkdown || "",
+    textContent: page.textContent || page.text || "",
+    headings: Array.isArray(page.headings) ? page.headings : [],
+    tags: Array.isArray(metadata.tags) ? metadata.tags.slice(0, 8) : [],
+    notes: "",
+    isFavorite: false,
+    isArchived: false,
+    deleted: false,
+    addedByUserId: "",
+    addedByName: "",
+    updatedAt: "",
     wordCount,
     readingTime: Math.max(1, Math.round(wordCount / 225)),
-    summary: metadata.summary || summarize(page.text),
-    tags: Array.isArray(metadata.tags) ? metadata.tags.slice(0, 8) : [],
     category: metadata.category || "Other",
     embedding: Array.isArray(metadata.embedding) ? metadata.embedding : semanticVector(`${metadata.category || ""} ${metadata.summary || ""}`),
     isRead: false,
-    status: page.fetchStatus || "ready",
-    error: page.fetchError || ""
+    status: page.fetchStatus || metadata.status || "ready",
+    error: [page.fetchError, metadata.error].filter(Boolean).join("; ")
+  };
+
+  return {
+    ...article,
+    url: requestedUrl,
+    source: sourceHost,
+    author: byline,
+    summary: excerpt,
+    excerpt,
+    dateAdded: capturedAt
   };
 }
 
@@ -440,6 +591,14 @@ function titleFromUrl(url) {
     .join(" ");
 }
 
+function hostFromUrl(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "article";
+  }
+}
+
 function summarize(text) {
   const sentences = String(text)
     .replace(/\s+/g, " ")
@@ -447,6 +606,65 @@ function summarize(text) {
     .filter(sentence => sentence.length > 40);
 
   return sentences.slice(0, 3).join(" ").slice(0, 900) || "Summary unavailable.";
+}
+
+function heuristicMetadata(page, error = "") {
+  const text = page.textContent || page.text || markdownToText(page.contentMarkdown || "");
+  const summary = summarize(text);
+  const tags = inferTags(`${page.title || ""} ${text}`);
+  const category = inferCategory(`${page.title || ""} ${summary} ${tags.join(" ")}`);
+
+  return {
+    title: page.title || titleFromUrl(page.url || page.requestedUrl || ""),
+    author: page.byline || page.author || "Unknown",
+    publisher: page.siteName || page.source || page.sourceHost || hostFromUrl(page.url || page.requestedUrl || ""),
+    publishedAt: page.publishedAt || "",
+    summary,
+    tags,
+    category,
+    wordCount: page.wordCount || countWords(text),
+    canonicalUrl: page.canonicalUrl || page.finalUrl || page.url || page.requestedUrl || "",
+    embedding: semanticVector(`${page.title || ""} ${summary} ${tags.join(" ")}`),
+    status: "metadata_failed",
+    error: error ? `Metadata unavailable: ${error}` : "Metadata unavailable"
+  };
+}
+
+function inferTags(text) {
+  const stop = new Set(["about", "after", "again", "also", "because", "before", "being", "between", "could", "every", "first", "from", "have", "into", "more", "most", "other", "over", "some", "than", "that", "their", "there", "these", "this", "through", "what", "when", "where", "which", "while", "with", "would"]);
+  const counts = new Map();
+  const words = String(text).toLowerCase().match(/[a-z][a-z-]{3,}/g) || [];
+
+  for (const word of words) {
+    if (stop.has(word)) continue;
+    counts.set(word, (counts.get(word) || 0) + 1);
+  }
+
+  return Array.from(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([word]) => slugify(word))
+    .filter(Boolean);
+}
+
+function inferCategory(text) {
+  const matchers = [
+    ["Business", /\b(startup|startups|business|strategy|management|company|companies|market|markets|economics|finance|labor|work)\b/i],
+    ["Mathematics", /\b(math|mathematics|mathematical)\b/i],
+    ["Philosophy", /\b(philosophy|philosophical|ethics|epistemology|consciousness|mind)\b/i],
+    ["Politics", /\b(policy|politics|political|government|governance|regulation|law|election|senate|congress|president)\b/i],
+    ["Design", /\b(design|typography|ux|interface|visual)\b/i],
+    ["Technology", /\b(technology|software|engineering|frontend|programming|ai|llm|prompt|computer|internet|web|data|infrastructure)\b/i],
+    ["Science", /\b(science|research|physics|biology|neuroscience|climate|space)\b/i],
+    ["Health", /\b(health|medicine|medical|sleep|exercise|nutrition|cognition)\b/i],
+    ["Culture", /\b(culture|media|society|language|writing|education|humanities)\b/i]
+  ];
+
+  for (const [label, matcher] of matchers) {
+    if (matcher.test(text)) return label;
+  }
+
+  return "Other";
 }
 
 function semanticVector(text) {
@@ -469,6 +687,14 @@ function hashWord(word) {
 
 function countWords(text) {
   return (String(text).match(/\S+/g) || []).length;
+}
+
+function slugify(value) {
+  return String(value)
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function json(payload, status, headers) {

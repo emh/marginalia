@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#fffff8">
   <meta name="application-name" content="Marginalia">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Marginalia">
@@ -23,7 +24,13 @@
 <body>
   <main id="library">
     <header>
-      <h1>marginalia</h1>
+      <div class="title-row">
+        <h1>marginalia</h1>
+        <div class="title-actions">
+          <span class="sync-dot" id="sync-dot" aria-label="not synced" title="not synced"></span>
+          <button class="nav-link" id="link-library-btn" type="button">link</button>
+        </div>
+      </div>
       <p id="stats"></p>
       <div class="reading-progress"><div class="reading-progress-fill" id="progress-fill"></div></div>
     </header>
@@ -44,6 +51,10 @@
 
   <div class="overlay" id="detail-overlay">
     <div class="overlay-content" id="detail-content"></div>
+  </div>
+
+  <div class="setup-screen" id="setup-screen">
+    <div class="setup-content" id="setup-content"></div>
   </div>
 
   <div class="toast" id="toast"></div>

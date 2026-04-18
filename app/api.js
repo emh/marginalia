@@ -1,6 +1,7 @@
+import { normalizeArticleRecord } from "./model.js";
 import { loadSettings } from "./storage.js";
 
-const ARTICLE_PATH = "/api/articles";
+const EXTRACT_PATH = "/api/extract";
 
 const BROAD_CATEGORY_MATCHERS = [
   ["Business", /\b(startup|startups|business|strategy|management|company|companies|market|markets|economics|finance|labor|work)\b/i],
@@ -45,7 +46,7 @@ export async function ingestArticle(url, settings = loadSettings()) {
 
 function getEndpoint(apiBaseUrl) {
   const base = apiBaseUrl ? apiBaseUrl.replace(/\/+$/, "") : getSameOriginApiBase();
-  return new URL(ARTICLE_PATH, `${base}/`).toString();
+  return new URL(EXTRACT_PATH, `${base}/`).toString();
 }
 
 function getSameOriginApiBase() {
@@ -68,32 +69,26 @@ async function getErrorMessage(response) {
 }
 
 function normalizeArticle(article) {
-  const source = article.source || article.siteName || hostFromUrl(article.url);
-  const wordCount = Number.isFinite(article.wordCount) ? article.wordCount : estimateWords(article.summary);
-  const readingTime = Number.isFinite(article.readingTime)
-    ? article.readingTime
-    : Math.max(1, Math.round(wordCount / 225));
-
-  return {
+  const source = article.sourceHost || article.source || article.siteName || hostFromUrl(article.requestedUrl || article.url);
+  const normalized = normalizeArticleRecord({
+    ...article,
     id: String(article.id || crypto.randomUUID()),
-    url: article.url,
-    canonicalUrl: article.canonicalUrl || article.url,
-    title: article.title || `Article from ${source}`,
-    source,
-    siteName: article.siteName || source,
-    author: article.author || "Unknown",
-    publishedAt: article.publishedAt || null,
-    dateAdded: article.dateAdded || new Date().toISOString(),
-    wordCount,
-    readingTime,
-    summary: article.summary || "",
-    tags: Array.isArray(article.tags) ? article.tags : [],
+    requestedUrl: article.requestedUrl || article.url,
+    finalUrl: article.finalUrl || article.url || article.requestedUrl,
+    sourceHost: source,
+    byline: article.byline || article.author || "Unknown",
+    excerpt: article.excerpt || article.summary || "",
+    capturedAt: article.capturedAt || article.dateAdded || new Date().toISOString(),
     category: normalizeCategory(article.category || "Other"),
-    isRead: Boolean(article.isRead),
-    embedding: Array.isArray(article.embedding) ? article.embedding : article.vec,
-    status: article.status || "ready",
-    error: article.error || ""
-  };
+    isArchived: article.isArchived == null ? article.isRead : article.isArchived
+  });
+
+  if (!normalized.wordCount) {
+    normalized.wordCount = estimateWords(normalized.textContent || normalized.excerpt);
+    normalized.readingTime = Math.max(1, Math.round(normalized.wordCount / 225));
+  }
+
+  return normalized;
 }
 
 function normalizeCategory(category) {

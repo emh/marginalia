@@ -1,4 +1,16 @@
-const STATE_STORAGE_KEY = "marginalia_v1";
+import {
+  applyMutation,
+  createDeviceId,
+  createMutation,
+  createUser,
+  normalizeArticleRecord,
+  normalizeCode,
+  normalizeUser
+} from "./model.js";
+
+export const STATE_STORAGE_KEY = "marginalia_v2";
+export const LEGACY_STORAGE_KEY = "marginalia_v1";
+export const SCHEMA_VERSION = 1;
 
 const LEGACY_TEST_URLS = new Set([
   "https://www.incompleteideas.net/IncIdeas/BitterLesson.html",
@@ -31,69 +43,164 @@ const BROAD_CATEGORY_MATCHERS = [
 export function loadAppState() {
   try {
     const raw = localStorage.getItem(STATE_STORAGE_KEY);
-    if (raw) {
-      const data = JSON.parse(raw);
-      if (Array.isArray(data.articles)) {
-        const articles = data.articles
-          .map(normalizeStoredArticle)
-          .filter(article => !isLegacyTestArticle(article));
-        let filter = normalizeStoredFilter(data.filter);
-        if (filter !== "All" && !articles.some(article => article.category === filter)) {
-          filter = "All";
-        }
-
-        return {
-          articles,
-          filter,
-          sortIndex: Number.isInteger(data.sortIndex) ? data.sortIndex : 0
-        };
-      }
-    }
+    if (raw) return normalizeStoredState(JSON.parse(raw));
   } catch {
-    // Fall through to empty state.
+    // Fall through to first-run state.
   }
 
   return {
-    articles: [],
-    filter: "All",
-    sortIndex: 0
+    ...createInitialState(),
+    pendingLegacy: loadLegacyState()
   };
 }
 
 export function saveAppState(state) {
   try {
-    localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify({
-      articles: state.articles,
-      filter: state.filter,
-      sortIndex: state.sortIndex
-    }));
+    localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(serializeState(state)));
   } catch {
     // Local storage can fail in private windows or quota pressure.
   }
 }
 
+export function createInitialState() {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    deviceId: createDeviceId(),
+    user: null,
+    hlc: { wallTime: 0, counter: 0 },
+    articles: [],
+    articleClocks: {},
+    sync: createSyncState(),
+    ui: {
+      filter: "All",
+      sortIndex: 0,
+      searchQuery: ""
+    },
+    filter: "All",
+    sortIndex: 0
+  };
+}
+
+export function normalizeStoredState(data = {}) {
+  const ui = normalizeUiState(data.ui || data);
+  const state = {
+    ...createInitialState(),
+    schemaVersion: SCHEMA_VERSION,
+    deviceId: typeof data.deviceId === "string" && data.deviceId ? data.deviceId : createDeviceId(),
+    user: normalizeUser(data.user),
+    hlc: normalizeClock(data.hlc),
+    articles: Array.isArray(data.articles)
+      ? data.articles.map(normalizeStoredArticle).filter(article => !isLegacyTestArticle(article))
+      : [],
+    articleClocks: plainObject(data.articleClocks),
+    sync: normalizeSyncState(data.sync),
+    ui,
+    filter: ui.filter,
+    sortIndex: ui.sortIndex
+  };
+
+  reconcileFilters(state);
+  return state;
+}
+
+export function migrateLegacyForUser(state, name) {
+  const nextUser = createUser(name);
+  state.user = nextUser;
+  state.sync = normalizeSyncState(state.sync);
+
+  const legacy = state.pendingLegacy || {
+    articles: state.articles || [],
+    filter: state.filter || "All",
+    sortIndex: Number.isInteger(state.sortIndex) ? state.sortIndex : 0
+  };
+
+  state.filter = legacy.filter || "All";
+  state.sortIndex = Number.isInteger(legacy.sortIndex) ? legacy.sortIndex : 0;
+  state.ui = normalizeUiState({ filter: state.filter, sortIndex: state.sortIndex });
+  state.articles = [];
+  state.articleClocks = {};
+
+  for (const legacyArticle of legacy.articles || []) {
+    const article = normalizeArticleRecord({
+      ...legacyArticle,
+      addedByUserId: nextUser.id,
+      addedByName: nextUser.name
+    });
+    const mutation = createMutation(state, "article", article.id, "_create", article);
+    applyMutation(state, mutation);
+    state.sync.mutationQueue.push(mutation);
+  }
+
+  delete state.pendingLegacy;
+  reconcileFilters(state);
+  return state;
+}
+
 export function loadSettings() {
   return {
-    apiBaseUrl: getConfiguredApiBaseUrl() || getDefaultApiBaseUrl(),
+    apiBaseUrl: getConfiguredApiBaseUrl() || getDefaultArticleApiBaseUrl(),
+    syncBaseUrl: getConfiguredSyncBaseUrl() || getDefaultSyncBaseUrl(),
     appToken: ""
   };
 }
 
-function normalizeStoredArticle(article) {
+function serializeState(state) {
+  const ui = normalizeUiState({
+    ...state.ui,
+    filter: state.filter,
+    sortIndex: state.sortIndex,
+    searchQuery: state.search || state.ui?.searchQuery || ""
+  });
+
   return {
-    ...article,
-    id: String(article.id),
-    source: article.source || article.siteName || hostFromUrl(article.url),
-    siteName: article.siteName || article.source || hostFromUrl(article.url),
-    tags: Array.isArray(article.tags) ? article.tags : [],
-    category: normalizeCategory(article.category || "Other"),
-    embedding: Array.isArray(article.embedding) ? article.embedding : article.vec,
-    isRead: Boolean(article.isRead)
+    schemaVersion: SCHEMA_VERSION,
+    deviceId: state.deviceId,
+    user: state.user || null,
+    hlc: normalizeClock(state.hlc),
+    articles: state.articles || [],
+    articleClocks: state.articleClocks || {},
+    sync: normalizeSyncState(state.sync),
+    ui
   };
 }
 
+function loadLegacyState() {
+  try {
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data.articles)) return null;
+    const articles = data.articles
+      .map(normalizeStoredArticle)
+      .filter(article => !isLegacyTestArticle(article));
+    let filter = normalizeStoredFilter(data.filter);
+    if (filter !== "All" && !articles.some(article => article.category === filter)) {
+      filter = "All";
+    }
+
+    return {
+      articles,
+      filter,
+      sortIndex: Number.isInteger(data.sortIndex) ? data.sortIndex : 0
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStoredArticle(article) {
+  return normalizeArticleRecord({
+    ...article,
+    sourceHost: article.sourceHost || article.source || article.siteName || hostFromUrl(article.url),
+    siteName: article.siteName || article.source || hostFromUrl(article.url),
+    category: normalizeCategory(article.category || "Other"),
+    embedding: Array.isArray(article.embedding) ? article.embedding : article.vec,
+    isArchived: article.isArchived == null ? article.isRead : article.isArchived
+  });
+}
+
 function isLegacyTestArticle(article) {
-  return String(article.id).startsWith("seed-") || LEGACY_TEST_URLS.has(article.url);
+  return String(article.id).startsWith("seed-") || LEGACY_TEST_URLS.has(article.url || article.requestedUrl);
 }
 
 function normalizeCategory(category) {
@@ -108,11 +215,49 @@ function normalizeCategory(category) {
 }
 
 function normalizeStoredFilter(filter) {
-  if (!filter || filter === "All" || filter === "Saved") return "All";
+  if (!filter || /^all$/i.test(filter) || filter === "Saved") return "All";
   return normalizeCategory(filter);
 }
 
-function getDefaultApiBaseUrl() {
+function normalizeUiState(input = {}) {
+  return {
+    filter: normalizeStoredFilter(input.filter),
+    sortIndex: Number.isInteger(input.sortIndex) ? input.sortIndex : 0,
+    searchQuery: typeof input.searchQuery === "string" ? input.searchQuery : ""
+  };
+}
+
+function createSyncState(input = {}) {
+  return {
+    mutationQueue: Array.isArray(input.mutationQueue) ? input.mutationQueue.filter(isQueuedMutation) : [],
+    lastSyncTimestamp: typeof input.lastSyncTimestamp === "string" ? input.lastSyncTimestamp : ""
+  };
+}
+
+function normalizeSyncState(input = {}) {
+  return createSyncState(input);
+}
+
+function normalizeClock(clock) {
+  return {
+    wallTime: Number.isFinite(clock?.wallTime) ? clock.wallTime : 0,
+    counter: Number.isFinite(clock?.counter) ? clock.counter : 0
+  };
+}
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function reconcileFilters(state) {
+  const articles = (state.articles || []).filter(article => !article.deleted);
+  if (state.filter !== "All" && !articles.some(article => article.category === state.filter)) {
+    state.filter = "All";
+    state.ui.filter = "All";
+  }
+}
+
+function getDefaultArticleApiBaseUrl() {
   const host = globalThis.location?.hostname || "";
   const protocol = globalThis.location?.protocol || "";
 
@@ -123,11 +268,40 @@ function getDefaultApiBaseUrl() {
   return "";
 }
 
+function getDefaultSyncBaseUrl() {
+  const host = globalThis.location?.hostname || "";
+  const protocol = globalThis.location?.protocol || "";
+
+  if (protocol === "file:" || host === "localhost" || host === "127.0.0.1") {
+    return "http://localhost:8789";
+  }
+
+  return "";
+}
+
 function getConfiguredApiBaseUrl() {
   const value = globalThis.MARGINALIA_CONFIG?.apiBaseUrl;
   if (typeof value !== "string") return "";
   if (value.includes("YOUR_")) return "";
   return value.trim().replace(/\/+$/, "");
+}
+
+function getConfiguredSyncBaseUrl() {
+  const value = globalThis.MARGINALIA_CONFIG?.syncBaseUrl;
+  if (typeof value !== "string") return "";
+  if (value.includes("YOUR_")) return "";
+  return value.trim().replace(/\/+$/, "");
+}
+
+function isQueuedMutation(mutation) {
+  return Boolean(
+    mutation &&
+    typeof mutation.id === "string" &&
+    typeof mutation.entityType === "string" &&
+    typeof mutation.entityId === "string" &&
+    typeof mutation.field === "string" &&
+    typeof mutation.timestamp === "string"
+  );
 }
 
 function hostFromUrl(url) {
