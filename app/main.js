@@ -6,11 +6,16 @@ import {
   createSyntheticMutation,
   normalizeArticleRecord,
   normalizeCode,
-  normalizeUserName,
   visibleArticles
 } from "./model.js";
-import { loadAppState, loadSettings, migrateLegacyForUser, saveAppState } from "./storage.js";
-import { MarginaliaSync, createRemoteLibrary, fetchRemoteLibrary } from "./sync.js";
+import { loadAppState, loadSettings, saveAppState } from "./storage.js";
+import {
+  MarginaliaSync,
+  createRemoteArticleShare,
+  createRemoteLibrary,
+  fetchRemoteArticleShare,
+  fetchRemoteLibrary
+} from "./sync.js";
 
 const SORTS = [
   { key: "newest", label: "newest first" },
@@ -36,6 +41,7 @@ const state = {
   currentArticle: null,
   pendingDeleteId: null,
   isReadingArticle: false,
+  overlayStack: [],
   setupScreen: null,
   setupPayload: null,
   syncStatus: "idle",
@@ -102,11 +108,7 @@ function save() {
 }
 
 function hasUser() {
-  return Boolean(state.user?.id && state.user?.name);
-}
-
-function currentUserLabel() {
-  return state.user?.name || "";
+  return Boolean(state.user?.id);
 }
 
 function getArticles(options = {}) {
@@ -186,8 +188,7 @@ function renderStats() {
   const hours = Math.floor(minutes / 60);
   const remaining = hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
 
-  const user = currentUserLabel() ? ` - ${currentUserLabel()}` : "";
-  $("stats").textContent = `${total} articles - ${read} read - ${remaining} remaining${user}`;
+  $("stats").textContent = `${total} articles - ${read} read - ${remaining} remaining`;
   $("progress-fill").style.width = total > 0 ? `${(read / total) * 100}%` : "0%";
 }
 
@@ -298,6 +299,7 @@ function articleDetailHtml(article) {
 
       <p class="detail-summary">${esc(article.summary)}</p>
       ${renderArticleNotice(article)}
+      ${renderMetadataSources(article)}
       <p class="detail-tags">${(article.tags || []).map(tag => esc(tag)).join(" - ")}</p>
 
       <hr class="detail-rule">
@@ -309,9 +311,10 @@ function articleDetailHtml(article) {
     </div>
 
     ${overlayFooterHtml(`
-      <div class="detail-actions">
+      <div class="detail-actions${state.pendingDeleteId === article.id ? " is-confirming-delete" : ""}">
         ${renderReadArticleAction(article)}
         <a class="action-link muted" href="${esc(article.finalUrl || article.canonicalUrl || article.url)}" target="_blank" rel="noopener">Open</a>
+        <button class="action-link" data-action="share-article" type="button">Share</button>
         <button class="action-link" data-action="toggle-read" type="button">${article.isArchived ? "Mark unread" : "Mark as read"}</button>
         ${renderDeleteAction(article)}
       </div>
@@ -349,6 +352,10 @@ function renderArticleNotice(article) {
     return `<p class="detail-summary">${esc("Metadata extraction failed. The original link is still in your library.")}</p>`;
   }
 
+  if (article.status === "metadata_only") {
+    return `<p class="detail-summary muted-copy">${esc("The article body could not be extracted. Metadata was filled from search when available.")}</p>`;
+  }
+
   if (hasMetadataError(article)) {
     return `<p class="detail-summary">${esc("Metadata enrichment failed. The article text was saved with fallback details.")}</p>`;
   }
@@ -356,7 +363,19 @@ function renderArticleNotice(article) {
   return "";
 }
 
+function renderMetadataSources(article) {
+  const sources = Array.isArray(article.metadataSources) ? article.metadataSources.slice(0, 5) : [];
+  if (!sources.length) return "";
+  return `
+    <p class="detail-sources">
+      Sources:
+      ${sources.map(source => `<a href="${esc(source.url)}" target="_blank" rel="noopener">${esc(source.title || source.url)}</a>`).join(" - ")}
+    </p>
+  `;
+}
+
 function hasMetadataError(article) {
+  if (hasArticleBody(article)) return false;
   return article.status === "metadata_failed" || /\bmetadata unavailable\b|\bmetadata worker failed\b/i.test(article.error || "");
 }
 
@@ -448,9 +467,13 @@ function renderDeleteAction(article) {
   }
 
   return `
-    <span class="delete-confirm-label">Delete?</span>
-    <button class="action-link danger" data-action="confirm-delete" type="button">Yes</button>
-    <button class="action-link muted" data-action="cancel-delete" type="button">Cancel</button>
+    <span class="delete-confirm-wrap">
+      <span class="delete-confirm-label">Delete?</span>
+      <span class="delete-confirm-menu">
+        <button class="action-link danger" data-action="confirm-delete" type="button">Yes</button>
+        <button class="action-link muted" data-action="cancel-delete" type="button">Cancel</button>
+      </span>
+    </span>
   `;
 }
 
@@ -467,57 +490,131 @@ function renderReadNext(article) {
 }
 
 function showDetail(id) {
-  const article = getArticles().find(candidate => candidate.id === id);
-  if (!article) return;
-
-  state.currentArticle = article;
-  state.pendingDeleteId = null;
-  state.isReadingArticle = false;
-  renderDetail(article);
-  $("detail-overlay").classList.add("active");
-  $("detail-overlay").scrollTop = 0;
-  document.body.classList.add("no-scroll");
+  if (!getArticles().some(candidate => candidate.id === id)) return;
+  openOverlayScreen({ type: "article-detail", articleId: id }, { reset: true });
 }
 
 function goBack() {
-  if ($("detail-overlay").classList.contains("active")) {
-    if (state.isReadingArticle && state.currentArticle) {
-      transitionArticleScreen(false, "back");
-      return;
-    }
-
-    $("detail-overlay").classList.remove("active");
-    document.body.classList.remove("no-scroll");
-    state.pendingDeleteId = null;
-    state.isReadingArticle = false;
-    renderAll();
-  }
+  if (!$("detail-overlay").classList.contains("active")) return;
+  popOverlayScreen();
 }
 
 function showArticleReader() {
   if (!state.currentArticle || !hasArticleBody(state.currentArticle)) return;
-  state.pendingDeleteId = null;
-  transitionArticleScreen(true, "forward");
+  openOverlayScreen({ type: "article-reader", articleId: state.currentArticle.id });
 }
 
 function backToArticleDetail() {
-  if (!state.currentArticle) return goBack();
-  transitionArticleScreen(false, "back");
+  goBack();
 }
 
-function transitionArticleScreen(nextIsReading, direction) {
-  if (!state.currentArticle) return;
-  if (state.isReadingArticle === nextIsReading) return;
+function currentOverlayScreen() {
+  return state.overlayStack[state.overlayStack.length - 1] || null;
+}
 
+function isSameOverlayScreen(left, right) {
+  return Boolean(
+    left &&
+    right &&
+    left.type === right.type &&
+    (left.articleId || "") === (right.articleId || "")
+  );
+}
+
+function overlayScreenHtml(screen) {
+  if (!screen) return "";
+
+  if (screen.type === "article-detail" || screen.type === "article-reader") {
+    const article = getArticles().find(candidate => candidate.id === screen.articleId);
+    if (!article) return missingArticleHtml();
+    return screen.type === "article-reader" ? articleReaderHtml(article) : articleDetailHtml(article);
+  }
+
+  return missingArticleHtml();
+}
+
+function renderOverlayScreen(screen = currentOverlayScreen()) {
+  const container = $("detail-content");
+  if (!screen) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+
+  if (screen.type === "article-detail" || screen.type === "article-reader") {
+    const article = getArticles().find(candidate => candidate.id === screen.articleId);
+    if (!article) {
+      container.className = "overlay-screen";
+      container.hidden = false;
+      container.innerHTML = missingArticleHtml();
+      state.currentArticle = null;
+      state.isReadingArticle = false;
+      return;
+    }
+
+    state.currentArticle = article;
+    state.isReadingArticle = screen.type === "article-reader";
+    renderDetail(article);
+    return;
+  }
+
+  state.currentArticle = null;
+  state.isReadingArticle = false;
+  container.className = "overlay-screen";
+  container.hidden = false;
+  container.innerHTML = missingArticleHtml();
+}
+
+function openOverlayScreen(screen, options = {}) {
+  const overlay = $("detail-overlay");
+  const container = $("detail-content");
+  const direction = options.direction || "forward";
+  const wasActive = overlay.classList.contains("active") && !overlay.classList.contains("is-screen-transitioning");
+  const current = currentOverlayScreen();
+
+  if (options.reset) {
+    state.overlayStack = [screen];
+  } else if (options.replace && state.overlayStack.length) {
+    state.overlayStack[state.overlayStack.length - 1] = screen;
+  } else if (!isSameOverlayScreen(current, screen)) {
+    state.overlayStack.push(screen);
+  }
+
+  state.pendingDeleteId = null;
+
+  if (wasActive && container.innerHTML.trim()) {
+    transitionDetailContent(overlayScreenHtml(screen), () => renderOverlayScreen(), direction);
+  } else {
+    renderOverlayScreen();
+    overlay.classList.add("active");
+    overlay.scrollTop = 0;
+    document.body.classList.add("no-scroll");
+  }
+}
+
+function replaceOverlayScreen(screen, direction = "forward") {
+  openOverlayScreen(screen, { replace: true, direction });
+}
+
+function popOverlayScreen(direction = "back") {
+  if (state.overlayStack.length <= 1) {
+    closeDetailOverlay();
+    return;
+  }
+
+  state.overlayStack.pop();
+  state.pendingDeleteId = null;
+  const next = currentOverlayScreen();
+  transitionDetailContent(overlayScreenHtml(next), () => renderOverlayScreen(), direction);
+}
+
+function transitionDetailContent(nextHtml, commit, direction = "forward") {
   const container = $("detail-content");
   const overlay = $("detail-overlay");
   const token = ++screenTransitionToken;
   const isBack = direction === "back";
   const scrollTop = overlay.scrollTop;
   const currentHtml = container.innerHTML;
-  const nextHtml = nextIsReading
-    ? articleReaderHtml(state.currentArticle)
-    : articleDetailHtml(state.currentArticle);
 
   const stage = document.createElement("div");
   stage.className = `screen-transition ${isBack ? "is-back" : "is-forward"}`;
@@ -538,12 +635,49 @@ function transitionArticleScreen(nextIsReading, direction) {
   setTimeout(() => {
     if (token !== screenTransitionToken) return;
 
-    state.isReadingArticle = nextIsReading;
-    renderDetail(state.currentArticle);
+    commit();
     overlay.scrollTop = 0;
     overlay.classList.remove("is-screen-transitioning");
     stage.remove();
   }, SCREEN_EXIT_MS);
+}
+
+function missingArticleHtml(message = "Article not found.") {
+  return `
+    ${overlayHeaderHtml("back")}
+    <div class="overlay-content has-fixed-header">
+      <p class="detail-summary muted-copy">${esc(message)}</p>
+    </div>
+  `;
+}
+
+function showArticleInOverlay(articleId, direction = "forward") {
+  if (!getArticles().some(candidate => candidate.id === articleId)) return;
+  openOverlayScreen({ type: "article-detail", articleId }, { direction });
+}
+
+function closeDetailOverlay() {
+  $("detail-overlay").classList.remove("active");
+  document.body.classList.remove("no-scroll");
+  state.overlayStack = [];
+  state.pendingDeleteId = null;
+  state.isReadingArticle = false;
+  state.currentArticle = null;
+  renderAll();
+}
+
+async function shareCurrentArticle() {
+  const article = state.currentArticle;
+  if (!article) return;
+  const payload = await createRemoteArticleShare({
+    user: state.user,
+    article
+  }, state.settings);
+  const code = normalizeCode(payload.code || payload.room?.code);
+  if (!code) throw new Error("Article share code missing");
+  state.setupScreen = "article-share";
+  state.setupPayload = { code, articleId: article.id };
+  renderAll();
 }
 
 function toggleRead(id) {
@@ -586,19 +720,11 @@ function deleteCurrentArticle() {
   state.currentArticle = null;
   state.pendingDeleteId = null;
   state.isReadingArticle = false;
-
-  $("detail-overlay").classList.remove("active");
-  document.body.classList.remove("no-scroll");
-  renderAll();
+  closeDetailOverlay();
   toast("Article deleted");
 }
 
 async function addArticle(url) {
-  if (!hasUser()) {
-    showNamePrompt();
-    return;
-  }
-
   if (isProcessing) return;
   isProcessing = true;
   let didAdd = false;
@@ -664,19 +790,16 @@ function renderInputError(status, error) {
   const detail = error instanceof Error ? error.message : "Could not add article";
   const summary = summaryForError(detail);
   const expandedDetail = detailForError(detail);
-  const copyDetail = expandedDetail || detail;
 
   if (summary === detail) {
     status.innerHTML = `
-      <span class="input-error-detail">${esc(copyDetail)}</span>
-      <button class="input-error-copy" data-error="${esc(copyDetail)}" type="button">copy error</button>
+      <span class="input-error-detail">${esc(expandedDetail || detail)}</span>
     `;
     return;
   }
 
   status.innerHTML = `
     <button class="input-error-summary" type="button" aria-expanded="false">${esc(summary)}</button>
-    <button class="input-error-copy" data-error="${esc(copyDetail)}" type="button">copy error</button>
     <span class="input-error-detail" hidden>${esc(expandedDetail)}</span>
   `;
 }
@@ -712,7 +835,6 @@ function upsertArticle(article) {
     ...article,
     id: existing?.id || article.id,
     addedByUserId: state.user.id,
-    addedByName: state.user.name,
     deleted: false
   });
   commitChanges([{ entityType: "article", entityId: next.id, field: "_create", value: next }]);
@@ -737,11 +859,6 @@ function articleUrlKeys(article) {
 }
 
 function commitChanges(changes, message) {
-  if (!hasUser()) {
-    showNamePrompt();
-    return [];
-  }
-
   const mutations = changes.map(change => createMutation(state, change.entityType, change.entityId, change.field, change.value));
   for (const mutation of mutations) {
     applyMutation(state, mutation);
@@ -761,11 +878,16 @@ function flushSync() {
 }
 
 function refreshCurrentArticle() {
-  if (!$("detail-overlay").classList.contains("active") || !state.currentArticle) return;
-  const article = getArticles().find(candidate => candidate.id === state.currentArticle.id);
-  if (!article) return;
-  state.currentArticle = article;
-  renderDetail(article);
+  const screen = currentOverlayScreen();
+  if (
+    !$("detail-overlay").classList.contains("active") ||
+    !screen ||
+    (screen.type !== "article-detail" && screen.type !== "article-reader")
+  ) {
+    return;
+  }
+
+  renderOverlayScreen(screen);
 }
 
 function renderAll() {
@@ -776,6 +898,9 @@ function renderAll() {
   renderCategories();
   renderSort();
   renderArticles();
+  if (currentOverlayScreen() && $("detail-overlay").classList.contains("active") && !$("detail-overlay").classList.contains("is-screen-transitioning")) {
+    renderOverlayScreen();
+  }
 }
 
 function renderSetupScreen() {
@@ -783,16 +908,11 @@ function renderSetupScreen() {
   const content = $("setup-content");
   if (!screen || !content) return;
 
-  const active = !hasUser() || Boolean(state.setupScreen);
+  const active = Boolean(state.setupScreen);
   screen.classList.toggle("active", active);
   document.body.classList.toggle("no-scroll", active || $("detail-overlay").classList.contains("active"));
   if (!active) {
     renderedSetupKey = "";
-    return;
-  }
-
-  if (!hasUser()) {
-    setSetupContent(renderNamePrompt(), "name", () => $("setup-name")?.focus());
     return;
   }
 
@@ -811,6 +931,26 @@ function renderSetupScreen() {
         <button class="action-link muted" data-action="copy-library-code" type="button">copy code</button>
       </div>
     `, `library-share:${code}`);
+    return;
+  }
+
+  if (state.setupScreen === "article-share") {
+    const code = state.setupPayload?.code || "";
+    const article = getArticles({ includeDeleted: true }).find(candidate => candidate.id === state.setupPayload?.articleId);
+    const url = articleShareLink(code);
+    setSetupContent(`
+      <button class="back-btn" data-action="close-setup" type="button">back</button>
+      <h1>${esc(article?.title || "share article")}</h1>
+      <p class="setup-copy">Send this link to share the article.</p>
+      <input class="share-field" id="article-share-url" value="${esc(url)}" readonly>
+      <div class="setup-code" id="article-share-code">${esc(code)}</div>
+      <div class="detail-actions">
+        <button class="action-link" data-action="share-article-url" type="button">share url</button>
+        <button class="action-link" data-action="copy-article-url" type="button">copy url</button>
+        <button class="action-link muted" data-action="copy-article-code" type="button">copy code</button>
+      </div>
+    `, `article-share:${code}`);
+    return;
   }
 }
 
@@ -827,43 +967,7 @@ function setSetupContent(html, key, afterRender) {
   if (afterRender) requestAnimationFrame(afterRender);
 }
 
-function renderNamePrompt() {
-  return `
-    <h1>marginalia</h1>
-    <p class="setup-copy">Pick a name before saving articles.</p>
-    <label class="field">
-      <span>Your name</span>
-      <input id="setup-name" autocomplete="name" spellcheck="false">
-    </label>
-    <div class="detail-actions">
-      <button class="action-link" data-action="save-name" type="button">continue</button>
-    </div>
-  `;
-}
-
-function showNamePrompt() {
-  state.setupScreen = "name";
-  state.setupPayload = null;
-  renderAll();
-}
-
-function completeNameSetup() {
-  const name = normalizeUserName($("setup-name")?.value);
-  if (!name) {
-    toast("Name required");
-    return;
-  }
-
-  migrateLegacyForUser(state, name);
-  state.setupScreen = null;
-  state.setupPayload = null;
-  save();
-  configureSync();
-  renderAll();
-}
-
 async function showLibraryLink() {
-  if (!hasUser()) return showNamePrompt();
   const code = await ensureLibraryCode();
   state.setupScreen = "library-share";
   state.setupPayload = { code };
@@ -896,13 +1000,26 @@ async function linkLibrary(code) {
   };
   state.sync.mutationQueue = [];
   state.sync.lastSyncTimestamp = payload.highWatermark || "";
-  stripLibraryQuery();
+  stripLinkQuery();
   save();
   configureSync();
   state.setupScreen = null;
   state.setupPayload = null;
   renderAll();
   toast("Library linked");
+}
+
+async function openSharedArticle(code) {
+  const payload = await fetchRemoteArticleShare(code, state.settings);
+  const article = payload.articles?.[0] || payload.article;
+  if (!article) throw new Error("Shared article not found");
+
+  const result = upsertArticle(article);
+  stripLinkQuery();
+  save();
+  renderAll();
+  showDetail(result.article.id);
+  toast(result.added ? "Article added" : "Article already saved");
 }
 
 function applyRemotePayload(payload) {
@@ -920,7 +1037,9 @@ function applyRemotePayload(payload) {
   }
 
   if (payload?.highWatermark) {
-    state.sync.lastSyncTimestamp = payload.highWatermark;
+    if (!payload.room || payload.room.type === "library") {
+      state.sync.lastSyncTimestamp = payload.highWatermark;
+    }
   }
 }
 
@@ -940,10 +1059,26 @@ function libraryLink(code) {
   return url.toString();
 }
 
-function stripLibraryQuery() {
+function articleShareLink(code) {
   const url = new URL(globalThis.location.href);
-  if (!url.searchParams.has("library")) return;
-  url.searchParams.delete("library");
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("article", code);
+  return url.toString();
+}
+
+function stripLinkQuery() {
+  const url = new URL(globalThis.location.href);
+  let changed = false;
+  if (url.searchParams.has("library")) {
+    url.searchParams.delete("library");
+    changed = true;
+  }
+  if (url.searchParams.has("article")) {
+    url.searchParams.delete("article");
+    changed = true;
+  }
+  if (!changed) return;
   history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
@@ -972,49 +1107,62 @@ function renderSyncIndicator() {
 }
 
 function configureSync() {
-  if (!hasUser() || !state.user.profileCode) {
+  if (!hasUser()) {
     librarySync?.stop();
     librarySync = null;
-    state.syncStatus = hasUser() ? "pending" : "idle";
+    state.syncStatus = "idle";
     return;
   }
 
-  if (librarySync && librarySync.code === state.user.profileCode) return;
-
-  librarySync?.stop();
-  librarySync = new MarginaliaSync({
-    code: state.user.profileCode,
-    state,
-    save,
-    onStatus(status) {
-      state.syncStatus = status;
-      renderSyncIndicator();
-    },
-    onChange() {
-      save();
-      renderAll();
-      refreshCurrentArticle();
-    },
-    onRoom(room) {
-      if (room?.code && state.user) {
-        state.user.profileCode = room.code;
+  if (!state.user.profileCode) {
+    librarySync?.stop();
+    librarySync = null;
+    state.syncStatus = state.sync?.mutationQueue?.length ? "pending" : "idle";
+  } else if (!librarySync || librarySync.code !== state.user.profileCode) {
+    librarySync?.stop();
+    librarySync = new MarginaliaSync({
+      code: state.user.profileCode,
+      state,
+      save,
+      onStatus(status) {
+        state.syncStatus = status;
+        renderSyncIndicator();
+      },
+      onChange() {
         save();
+        renderAll();
+        refreshCurrentArticle();
+      },
+      onRoom(room) {
+        if (room?.code && state.user) {
+          state.user.profileCode = room.code;
+          save();
+        }
       }
-    }
-  });
-  librarySync.start();
+    });
+    librarySync.start();
+  }
 }
 
-function handleLibraryQuery() {
+function handleLinkQueries() {
   const params = new URLSearchParams(globalThis.location.search);
-  const code = normalizeCode(params.get("library"));
-  if (code) runAction(() => linkLibrary(code));
+  const libraryCode = normalizeCode(params.get("library"));
+  const articleCode = normalizeCode(params.get("article"));
+
+  if (libraryCode) {
+    runAction(() => linkLibrary(libraryCode));
+    return;
+  }
+
+  if (articleCode) {
+    runAction(() => openSharedArticle(articleCode));
+  }
 }
 
 function closeSetup() {
   state.setupScreen = null;
   state.setupPayload = null;
-  stripLibraryQuery();
+  stripLinkQuery();
   renderAll();
 }
 
@@ -1035,32 +1183,17 @@ function bindEvents() {
     if (!action) return;
 
     runAction(async () => {
-      if (action.dataset.action === "save-name") return completeNameSetup();
       if (action.dataset.action === "close-setup") return closeSetup();
       if (action.dataset.action === "copy-library-url") return copyText($("library-share-url")?.value || "", "url copied");
       if (action.dataset.action === "copy-library-code") return copyText($("library-share-code")?.textContent || "", "code copied");
       if (action.dataset.action === "share-library-url") return shareText("link marginalia library", $("library-share-url")?.value || "", "url copied");
+      if (action.dataset.action === "copy-article-url") return copyText($("article-share-url")?.value || "", "url copied");
+      if (action.dataset.action === "copy-article-code") return copyText($("article-share-code")?.textContent || "", "code copied");
+      if (action.dataset.action === "share-article-url") return shareText("share marginalia article", $("article-share-url")?.value || "", "url copied");
     });
   });
 
-  $("setup-content")?.addEventListener("keydown", event => {
-    if (event.key !== "Enter") return;
-    if (event.target?.id === "setup-name") {
-      event.preventDefault();
-      completeNameSetup();
-    }
-  });
-
   status.addEventListener("click", event => {
-    const copy = event.target.closest(".input-error-copy");
-    if (copy) {
-      const text = copy.dataset.error || status.querySelector(".input-error-detail")?.textContent || "";
-      if (text) {
-        navigator.clipboard?.writeText(text).then(() => toast("Error copied")).catch(() => {});
-      }
-      return;
-    }
-
     const toggle = event.target.closest(".input-error-summary");
     if (!toggle) return;
 
@@ -1132,6 +1265,7 @@ function bindEvents() {
       if (action.dataset.action === "back") return goBack();
       if (action.dataset.action === "back-to-detail") return backToArticleDetail();
       if (action.dataset.action === "read-article") return showArticleReader();
+      if (action.dataset.action === "share-article") return runAction(shareCurrentArticle);
       if (action.dataset.action === "toggle-read") return toggleRead(state.currentArticle.id);
       if (action.dataset.action === "request-delete") return requestDeleteCurrentArticle();
       if (action.dataset.action === "confirm-delete") return deleteCurrentArticle();
@@ -1142,11 +1276,7 @@ function bindEvents() {
     if (!related) return;
     const article = getArticles().find(candidate => candidate.id === related.dataset.id);
     if (!article) return;
-    state.currentArticle = article;
-    state.pendingDeleteId = null;
-    state.isReadingArticle = false;
-    renderDetail(article);
-    $("detail-overlay").scrollTop = 0;
+    showArticleInOverlay(article.id);
   });
 
   document.addEventListener("keydown", event => {
@@ -1159,7 +1289,7 @@ function bindEvents() {
 
 function init() {
   bindEvents();
-  handleLibraryQuery();
+  handleLinkQueries();
   configureSync();
   renderAll();
   registerServiceWorker();

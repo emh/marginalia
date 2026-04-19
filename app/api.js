@@ -119,6 +119,7 @@ function isExtractionFailure(article) {
   return (
     article.status === "failed" ||
     article.status === "fetch_failed" ||
+    article.status === "metadata_only" ||
     /metadata could not be extracted/i.test(article.summary)
   );
 }

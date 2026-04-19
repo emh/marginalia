@@ -19,14 +19,14 @@ export const ARTICLE_FIELDS = [
   "isArchived",
   "deleted",
   "addedByUserId",
-  "addedByName",
   "updatedAt",
   "wordCount",
   "readingTime",
   "category",
   "embedding",
   "status",
-  "error"
+  "error",
+  "metadataSources"
 ];
 
 export const ARTICLE_MUTATION_FIELDS = [
@@ -48,10 +48,9 @@ export function createDeviceId() {
   return createId();
 }
 
-export function createUser(name) {
+export function createUser() {
   return {
     id: createId(),
-    name: normalizeUserName(name),
     profileCode: ""
   };
 }
@@ -59,17 +58,11 @@ export function createUser(name) {
 export function normalizeUser(user) {
   if (!user || typeof user !== "object") return null;
   const id = typeof user.id === "string" && user.id.trim() ? user.id.trim() : "";
-  const name = normalizeUserName(user.name);
-  if (!id || !name) return null;
+  if (!id) return null;
   return {
     id,
-    name,
     profileCode: normalizeCode(user.profileCode)
   };
-}
-
-export function normalizeUserName(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 export function normalizeCode(value) {
@@ -128,8 +121,8 @@ export function observeHlc(state, timestamp, now = Date.now(), deviceId = state.
 }
 
 export function createMutation(state, entityType, entityId, field, value) {
-  const user = state.user;
-  if (!user?.id || !user.name) throw new Error("User name required");
+  const user = state.user || createUser();
+  if (!user.id) throw new Error("User id required");
 
   return {
     id: createId(),
@@ -139,7 +132,6 @@ export function createMutation(state, entityType, entityId, field, value) {
     value,
     timestamp: tickHlc(state, Date.now(), state.deviceId),
     authorId: user.id,
-    authorName: user.name,
     deviceId: state.deviceId
   };
 }
@@ -181,7 +173,6 @@ export function normalizeArticleRecord(input = {}) {
     isArchived,
     deleted: Boolean(input.deleted),
     addedByUserId: stringOr(input.addedByUserId, ""),
-    addedByName: stringOr(input.addedByName, ""),
     updatedAt: typeof input.updatedAt === "string" ? input.updatedAt : "",
     wordCount,
     readingTime: numberOr(input.readingTime, Math.max(1, Math.round(wordCount / 225))),
@@ -189,6 +180,7 @@ export function normalizeArticleRecord(input = {}) {
     embedding: Array.isArray(input.embedding) ? input.embedding : Array.isArray(input.vec) ? input.vec : undefined,
     status: stringOr(input.status, "ready"),
     error: stringOr(input.error, ""),
+    metadataSources: normalizeSources(input.metadataSources || input.sources),
 
     // Compatibility aliases used by the existing presentation layer.
     url: requestedUrl || finalUrl || canonicalUrl,
@@ -215,9 +207,7 @@ export function applyMutations(state, mutations = []) {
 export function applyMutation(state, mutation) {
   if (!isMutationLike(mutation)) return false;
   observeHlc(state, mutation.timestamp);
-
-  if (mutation.entityType === "article") return applyArticleMutation(state, mutation);
-  return false;
+  return applyArticleMutation(state, mutation);
 }
 
 export function createSyntheticMutation(entityType, entityId, field, value, state = {}) {
@@ -229,12 +219,12 @@ export function createSyntheticMutation(entityType, entityId, field, value, stat
     value,
     timestamp: `${String(Date.now()).padStart(13, "0")}:0000:import`,
     authorId: value.addedByUserId || state.user?.id || "import",
-    authorName: value.addedByName || state.user?.name || "Imported",
     deviceId: "import"
   };
 }
 
 function applyArticleMutation(state, mutation) {
+  state.articles ||= [];
   state.articleClocks ||= {};
   state.articleClocks[mutation.entityId] ||= {};
   const clocks = state.articleClocks[mutation.entityId];
@@ -309,6 +299,27 @@ function normalizeTags(value) {
   return Array.isArray(value)
     ? value.map(tag => String(tag || "").trim()).filter(Boolean).slice(0, 12)
     : [];
+}
+
+function normalizeSources(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const sources = [];
+
+  for (const item of value) {
+    const url = stringOr(item?.url || item?.href || item?.uri, "");
+    if (!/^https?:\/\//i.test(url)) continue;
+    const key = url.replace(/#.*$/, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sources.push({
+      title: stringOr(item?.title || hostFromUrl(key), hostFromUrl(key)).slice(0, 160),
+      url: key
+    });
+    if (sources.length >= 5) break;
+  }
+
+  return sources;
 }
 
 function normalizeCategory(category) {

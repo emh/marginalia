@@ -7,3 +7,4 @@ workers_dev = true
 MOCK_LLM = "false"
 OPENAI_MODEL = "gpt-5.4-nano"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+METADATA_WEB_SEARCH = "true"

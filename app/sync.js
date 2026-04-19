@@ -252,6 +252,23 @@ export async function fetchRemoteLibrary(code, settings = loadSettings()) {
   return response.json();
 }
 
+export async function createRemoteArticleShare({ article, user, mutations }, settings = loadSettings()) {
+  const response = await fetch(getEndpoint(settings.syncBaseUrl, "/api/articles"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ article, user, mutations })
+  });
+
+  if (!response.ok) throw new Error(await getErrorMessage(response));
+  return response.json();
+}
+
+export async function fetchRemoteArticleShare(code, settings = loadSettings()) {
+  const response = await fetch(getArticleEndpoint(settings.syncBaseUrl, code, ""));
+  if (!response.ok) throw new Error(await getErrorMessage(response));
+  return response.json();
+}
+
 function getEndpoint(syncBaseUrl, path) {
   if (!syncBaseUrl) throw new Error("Sync worker is not configured");
   const base = syncBaseUrl.replace(/\/+$/, "");
@@ -260,6 +277,10 @@ function getEndpoint(syncBaseUrl, path) {
 
 function getLibraryEndpoint(syncBaseUrl, code, path) {
   return getEndpoint(syncBaseUrl, `/api/libraries/${encodeURIComponent(normalizeCode(code))}${path}`);
+}
+
+function getArticleEndpoint(syncBaseUrl, code, path) {
+  return getEndpoint(syncBaseUrl, `/api/articles/${encodeURIComponent(normalizeCode(code))}${path}`);
 }
 
 function getWebSocketUrl(syncBaseUrl, code) {

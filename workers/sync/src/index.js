@@ -22,14 +22,14 @@ const ARTICLE_FIELDS = new Set([
   "isArchived",
   "deleted",
   "addedByUserId",
-  "addedByName",
   "updatedAt",
   "wordCount",
   "readingTime",
   "category",
   "embedding",
   "status",
-  "error"
+  "error",
+  "metadataSources"
 ]);
 
 const ARTICLE_MUTATION_FIELDS = new Set(["_create", "title", "tags", "notes", "isFavorite", "isArchived", "deleted"]);
@@ -66,7 +66,7 @@ export class LibraryRoom {
     }
 
     const url = new URL(request.url);
-    const route = parseLibraryRoute(url.pathname);
+    const route = parseRoomRoute(url.pathname);
     if (!route) return json({ error: "Not found" }, 404, cors);
 
     try {
@@ -78,11 +78,11 @@ export class LibraryRoom {
         return json(await this.materializedPayload(await this.requireRoom()), 200, cors);
       }
 
-      if (route.action === "sync" && request.method === "GET") {
+      if (route.kind === "libraries" && route.action === "sync" && request.method === "GET") {
         return this.handleWebSocket(request);
       }
 
-      if (route.action === "sync" && request.method === "POST") {
+      if (route.kind === "libraries" && route.action === "sync" && request.method === "POST") {
         return this.handleHttpSync(request, cors);
       }
 
@@ -102,13 +102,16 @@ export class LibraryRoom {
     }
 
     const existing = await this.getRoom();
-    if (existing) return json({ error: "Library code already exists" }, 409, cors);
+    if (existing) return json({ error: `${roomLabel(route.kind)} code already exists` }, 409, cors);
 
-    const body = await request.json();
-    const room = normalizeLibraryRoom({ code: route.code, user: body.user });
+    const body = await readJson(request);
+    const room = normalizeRoom(route, body);
     await this.saveRoom(room);
 
-    const accepted = await this.acceptMutations(Array.isArray(body.mutations) ? body.mutations : [], room);
+    const mutations = Array.isArray(body.mutations) && body.mutations.length
+      ? body.mutations
+      : buildSeedMutations(room, body);
+    const accepted = await this.acceptMutations(mutations, room, { creating: true });
     const payload = await this.materializedPayload(room);
     return json({ ...payload, confirmedIds: accepted.map(mutation => mutation.id) }, 200, cors);
   }
@@ -128,14 +131,24 @@ export class LibraryRoom {
 
   async handleHttpSync(request, cors) {
     const room = await this.requireRoom();
-    const body = await request.json();
+    const body = await readJson(request);
     const accepted = await this.acceptMutations(Array.isArray(body.mutations) ? body.mutations : [], room);
     const mutations = await this.listSince(typeof body.since === "string" ? body.since : "");
+    const highWatermark = await this.highWatermark();
+
+    if (accepted.length) {
+      this.broadcast(null, {
+        type: "mutations",
+        items: accepted,
+        highWatermark
+      });
+    }
+
     return json({
       room,
       mutations,
       confirmedIds: accepted.map(mutation => mutation.id),
-      highWatermark: await this.highWatermark()
+      highWatermark
     }, 200, cors);
   }
 
@@ -144,6 +157,11 @@ export class LibraryRoom {
 
     try {
       const room = await this.requireRoom();
+      if (room.type !== "library") {
+        socket.send(JSON.stringify({ type: "error", message: "Article shares do not sync" }));
+        return;
+      }
+
       const message = parseSocketMessage(raw);
 
       if (message.type === "sync") {
@@ -198,12 +216,12 @@ export class LibraryRoom {
     }
   }
 
-  async acceptMutations(input, room) {
+  async acceptMutations(input, room, options = {}) {
     const accepted = [];
 
     for (const candidate of input) {
       const mutation = validateMutation(candidate, room);
-      this.authorizeMutation(mutation, room);
+      this.authorizeMutation(mutation, room, options);
       const exists = [...this.state.storage.sql.exec("SELECT id FROM mutations WHERE id = ?", mutation.id)];
       if (exists.length) continue;
 
@@ -220,10 +238,10 @@ export class LibraryRoom {
     return accepted;
   }
 
-  authorizeMutation(mutation, room) {
-    if (room.user?.id && mutation.authorId !== room.user.id) {
-      throw new Error("Invalid library author");
-    }
+  authorizeMutation(mutation, room, options = {}) {
+    if (room.type === "library") return;
+    if (room.type === "article_share" && options.creating && mutation.entityType === "article") return;
+    throw new Error("Article shares are read-only");
   }
 
   async listSince(since) {
@@ -257,7 +275,7 @@ export class LibraryRoom {
 
   async requireRoom() {
     const room = await this.getRoom();
-    if (!room) throw statusError("Library not found", 404);
+    if (!room) throw statusError("Room not found", 404);
     return room;
   }
 
@@ -280,27 +298,31 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "POST" && url.pathname === "/api/libraries") {
-      return createRoomWithFreshCode(request, env, cors);
+      return createRoomWithFreshCode(request, env, cors, "libraries");
     }
 
-    const route = parseLibraryRoute(url.pathname);
+    if (request.method === "POST" && url.pathname === "/api/articles") {
+      return createRoomWithFreshCode(request, env, cors, "articles");
+    }
+
+    const route = parseRoomRoute(url.pathname);
     if (!route) return json({ error: "Not found" }, 404, cors);
 
-    const id = env.MARGINALIA_LIBRARY.idFromName(`library:${route.code}`);
+    const id = env.MARGINALIA_LIBRARY.idFromName(`${roomPrefix(route.kind)}:${route.code}`);
     const room = env.MARGINALIA_LIBRARY.get(id);
     return room.fetch(request);
   }
 };
 
-async function createRoomWithFreshCode(request, env, cors) {
+async function createRoomWithFreshCode(request, env, cors, kind) {
   const body = await request.text();
 
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const code = generateInviteCode();
-    const id = env.MARGINALIA_LIBRARY.idFromName(`library:${code}`);
+    const id = env.MARGINALIA_LIBRARY.idFromName(`${roomPrefix(kind)}:${code}`);
     const room = env.MARGINALIA_LIBRARY.get(id);
     const url = new URL(request.url);
-    url.pathname = `/api/libraries/${code}`;
+    url.pathname = `/api/${kind}/${code}`;
 
     const response = await room.fetch(new Request(url, {
       method: "POST",
@@ -315,15 +337,25 @@ async function createRoomWithFreshCode(request, env, cors) {
     if (response.status !== 409) return response;
   }
 
-  return json({ error: "Could not create library code" }, 500, cors);
+  return json({ error: `Could not create ${roomLabel(kind)} code` }, 500, cors);
+}
+
+export function parseRoomRoute(pathname) {
+  const match = /^\/api\/(libraries|articles)\/([A-Za-z0-9]+)(?:\/(sync|state))?\/?$/.exec(pathname);
+  if (!match) return null;
+  return {
+    kind: match[1],
+    code: normalizeCode(match[2]),
+    action: match[3] || ""
+  };
 }
 
 export function parseLibraryRoute(pathname) {
-  const match = /^\/api\/libraries\/([A-Za-z0-9]+)(?:\/(sync|state))?\/?$/.exec(pathname);
-  if (!match) return null;
+  const route = parseRoomRoute(pathname);
+  if (!route || route.kind !== "libraries") return null;
   return {
-    code: normalizeCode(match[1]),
-    action: match[2] || ""
+    code: route.code,
+    action: route.action
   };
 }
 
@@ -331,6 +363,14 @@ export function generateInviteCode(length = CODE_LENGTH) {
   const bytes = new Uint8Array(length);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, byte => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("");
+}
+
+function normalizeRoom(route, body = {}) {
+  if (route.kind === "articles") {
+    return normalizeArticleShareRoom({ code: route.code, article: body.article });
+  }
+
+  return normalizeLibraryRoom({ code: route.code, user: body.user });
 }
 
 export function normalizeLibraryRoom(input = {}) {
@@ -345,7 +385,20 @@ export function normalizeLibraryRoom(input = {}) {
   };
 }
 
-export function validateMutation(input, room) {
+export function normalizeArticleShareRoom(input = {}) {
+  const code = normalizeCode(input.code);
+  const articleId = String(input.article?.id || "").trim();
+  if (!code) throw new Error("Code is required");
+  if (!articleId) throw new Error("Article is required");
+  return {
+    type: "article_share",
+    code,
+    articleId,
+    createdAt: typeof input.createdAt === "string" ? input.createdAt : new Date().toISOString()
+  };
+}
+
+export function validateMutation(input) {
   if (!input || typeof input !== "object") throw new Error("Mutation must be an object");
   const mutation = {
     id: stringValue(input.id, "Mutation id"),
@@ -355,15 +408,13 @@ export function validateMutation(input, room) {
     value: input.value,
     timestamp: stringValue(input.timestamp, "Timestamp"),
     authorId: stringValue(input.authorId, "Author id"),
-    authorName: normalizeUserName(input.authorName),
     deviceId: stringValue(input.deviceId, "Device id")
   };
 
-  if (!mutation.authorName) throw new Error("Author name is required");
   if (mutation.entityType !== "article") throw new Error("Invalid entity type");
   if (!isHlc(mutation.timestamp)) throw new Error("Invalid timestamp");
 
-  return validateArticleMutation(mutation, room);
+  return validateArticleMutation(mutation);
 }
 
 export function materializeMutations(mutations, room) {
@@ -429,6 +480,28 @@ function validateArticleMutation(mutation) {
   return { ...mutation, field, value: coerceArticleField(field, mutation.value) };
 }
 
+function buildSeedMutations(room, body = {}) {
+  if (room.type !== "article_share") return [];
+  const user = normalizeUser(body.user || {});
+  const article = normalizeArticle({ ...body.article, id: room.articleId, deleted: false });
+  return [
+    serverMutation("article", article.id, "_create", article, user)
+  ];
+}
+
+function serverMutation(entityType, entityId, field, value, user) {
+  return {
+    id: crypto.randomUUID(),
+    entityType,
+    entityId,
+    field,
+    value,
+    timestamp: `${String(Date.now()).padStart(13, "0")}:0000:server`,
+    authorId: user.id,
+    deviceId: "server"
+  };
+}
+
 function normalizeArticle(input = {}) {
   const requestedUrl = stringOr(input.requestedUrl, input.url || input.finalUrl || input.canonicalUrl || "");
   const finalUrl = stringOr(input.finalUrl, input.url || requestedUrl);
@@ -466,14 +539,14 @@ function normalizeArticle(input = {}) {
     isArchived,
     deleted: Boolean(input.deleted),
     addedByUserId: stringOr(input.addedByUserId, ""),
-    addedByName: stringOr(input.addedByName, ""),
     updatedAt: typeof input.updatedAt === "string" ? input.updatedAt : "",
     wordCount,
     readingTime: numberOr(input.readingTime, Math.max(1, Math.round(wordCount / 225))),
     category: stringOr(input.category, "Other").slice(0, 40),
     embedding: Array.isArray(input.embedding) ? input.embedding : undefined,
     status: stringOr(input.status, "ready"),
-    error: stringOr(input.error, "")
+    error: stringOr(input.error, ""),
+    metadataSources: normalizeSources(input.metadataSources || input.sources)
   };
   applyAliases(article);
   return article;
@@ -497,18 +570,10 @@ function applyAliases(article) {
 }
 
 function normalizeUser(input = {}) {
-  const id = stringValue(input.id, "User id");
-  const name = normalizeUserName(input.name);
-  if (!name) throw new Error("User name is required");
   return {
-    id,
-    name,
+    id: typeof input.id === "string" && input.id.trim() ? input.id.trim() : "share",
     profileCode: normalizeCode(input.profileCode)
   };
-}
-
-function normalizeUserName(value) {
-  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
 function normalizeHeadings(value) {
@@ -529,6 +594,27 @@ function normalizeTags(value) {
   return Array.isArray(value)
     ? value.map(tag => String(tag || "").trim()).filter(Boolean).slice(0, 12)
     : [];
+}
+
+function normalizeSources(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const sources = [];
+
+  for (const item of value) {
+    const url = stringOr(item?.url || item?.href || item?.uri, "");
+    if (!/^https?:\/\//i.test(url)) continue;
+    const key = url.replace(/#.*$/, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sources.push({
+      title: stringOr(item?.title || hostFromUrl(key), hostFromUrl(key)).slice(0, 160),
+      url: key
+    });
+    if (sources.length >= 5) break;
+  }
+
+  return sources;
 }
 
 function parseSocketMessage(raw) {
@@ -592,6 +678,22 @@ function hostFromUrl(url) {
     return new URL(url).hostname.replace(/^www\./, "");
   } catch {
     return "";
+  }
+}
+
+function roomPrefix(kind) {
+  return kind === "articles" ? "article" : "library";
+}
+
+function roomLabel(kind) {
+  return kind === "articles" ? "article" : "library";
+}
+
+async function readJson(request) {
+  try {
+    return await request.json();
+  } catch {
+    return {};
   }
 }
 

@@ -190,8 +190,7 @@ header h1 {
   color: var(--red);
 }
 
-.input-error-summary,
-.input-error-copy {
+.input-error-summary {
   padding: 0;
   border: none;
   background: none;
@@ -202,14 +201,8 @@ header h1 {
   letter-spacing: inherit;
 }
 
-.input-error-summary:hover,
-.input-error-copy:hover {
+.input-error-summary:hover {
   color: var(--red-light);
-}
-
-.input-error-copy {
-  margin-left: 10px;
-  color: var(--ink-light);
 }
 
 .input-error-detail {
@@ -633,6 +626,23 @@ header h1 {
   line-height: 1.7;
 }
 
+.detail-sources {
+  margin: -8px 0 20px;
+  color: var(--ink-light);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.detail-sources a {
+  color: var(--ink-mid);
+  text-decoration: none;
+}
+
+.detail-sources a:hover {
+  color: var(--accent);
+}
+
 .article-body {
   font-size: 18px;
   line-height: 1.75;
@@ -715,11 +725,15 @@ header h1 {
   font-size: 13px;
 }
 
+.muted-copy {
+  color: var(--ink-light);
+}
+
 .detail-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 24px;
-  align-items: baseline;
+  align-items: center;
 }
 
 .action-link {
@@ -748,9 +762,27 @@ header h1 {
   color: var(--ink-mid);
 }
 
-.delete-confirm-label {
+.delete-confirm-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
   color: var(--ink-light);
   font-size: 15px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.delete-confirm-menu {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.delete-confirm-menu .action-link {
+  padding: 0;
+  line-height: 1.1;
 }
 
 .action-link.danger:hover {

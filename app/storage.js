@@ -4,7 +4,6 @@ import {
   createMutation,
   createUser,
   normalizeArticleRecord,
-  normalizeCode,
   normalizeUser
 } from "./model.js";
 
@@ -48,10 +47,12 @@ export function loadAppState() {
     // Fall through to first-run state.
   }
 
-  return {
+  const state = {
     ...createInitialState(),
     pendingLegacy: loadLegacyState()
   };
+  migrateLegacyForUser(state);
+  return state;
 }
 
 export function saveAppState(state) {
@@ -66,7 +67,7 @@ export function createInitialState() {
   return {
     schemaVersion: SCHEMA_VERSION,
     deviceId: createDeviceId(),
-    user: null,
+    user: createUser(),
     hlc: { wallTime: 0, counter: 0 },
     articles: [],
     articleClocks: {},
@@ -87,7 +88,7 @@ export function normalizeStoredState(data = {}) {
     ...createInitialState(),
     schemaVersion: SCHEMA_VERSION,
     deviceId: typeof data.deviceId === "string" && data.deviceId ? data.deviceId : createDeviceId(),
-    user: normalizeUser(data.user),
+    user: normalizeUser(data.user) || createUser(),
     hlc: normalizeClock(data.hlc),
     articles: Array.isArray(data.articles)
       ? data.articles.map(normalizeStoredArticle).filter(article => !isLegacyTestArticle(article))
@@ -103,16 +104,15 @@ export function normalizeStoredState(data = {}) {
   return state;
 }
 
-export function migrateLegacyForUser(state, name) {
-  const nextUser = createUser(name);
-  state.user = nextUser;
+export function migrateLegacyForUser(state) {
+  state.user = normalizeUser(state.user) || createUser();
   state.sync = normalizeSyncState(state.sync);
 
-  const legacy = state.pendingLegacy || {
-    articles: state.articles || [],
-    filter: state.filter || "All",
-    sortIndex: Number.isInteger(state.sortIndex) ? state.sortIndex : 0
-  };
+  const legacy = state.pendingLegacy;
+  if (!legacy) {
+    delete state.pendingLegacy;
+    return state;
+  }
 
   state.filter = legacy.filter || "All";
   state.sortIndex = Number.isInteger(legacy.sortIndex) ? legacy.sortIndex : 0;
@@ -123,8 +123,7 @@ export function migrateLegacyForUser(state, name) {
   for (const legacyArticle of legacy.articles || []) {
     const article = normalizeArticleRecord({
       ...legacyArticle,
-      addedByUserId: nextUser.id,
-      addedByName: nextUser.name
+      addedByUserId: state.user.id
     });
     const mutation = createMutation(state, "article", article.id, "_create", article);
     applyMutation(state, mutation);
@@ -155,7 +154,7 @@ function serializeState(state) {
   return {
     schemaVersion: SCHEMA_VERSION,
     deviceId: state.deviceId,
-    user: state.user || null,
+    user: normalizeUser(state.user) || createUser(),
     hlc: normalizeClock(state.hlc),
     articles: state.articles || [],
     articleClocks: state.articleClocks || {},

@@ -64,7 +64,7 @@ test("article fields use last-write-wins per field", () => {
 function emptyState() {
   return {
     deviceId: "device-a",
-    user: { id: "user-a", name: "A" },
+    user: { id: "user-a" },
     hlc: { wallTime: 0, counter: 0 },
     articles: [],
     articleClocks: {}
@@ -80,7 +80,6 @@ function mutation(overrides) {
     value: "value",
     timestamp: hlc(100),
     authorId: "user-a",
-    authorName: "A",
     deviceId: "device-a",
     ...overrides
   };

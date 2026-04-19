@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MarginaliaSync } from "../app/sync.js";
-import { materializeMutations, parseLibraryRoute } from "../workers/sync/src/index.js";
+import { materializeMutations, parseLibraryRoute, parseRoomRoute } from "../workers/sync/src/index.js";
 
 test("library routes parse only supported room paths", () => {
   assert.deepEqual(parseLibraryRoute("/api/libraries/abc123/sync"), {
@@ -15,11 +15,25 @@ test("library routes parse only supported room paths", () => {
   assert.equal(parseLibraryRoute("/api/profiles/abc123"), null);
 });
 
+test("article share routes parse supported room paths", () => {
+  assert.deepEqual(parseRoomRoute("/api/articles/abc123"), {
+    kind: "articles",
+    code: "ABC123",
+    action: ""
+  });
+  assert.deepEqual(parseRoomRoute("/api/articles/abc123/state"), {
+    kind: "articles",
+    code: "ABC123",
+    action: "state"
+  });
+  assert.equal(parseRoomRoute("/api/folders/abc123"), null);
+});
+
 test("worker materialization sorts by HLC and keeps tombstones out of visible state", () => {
   const room = {
     type: "library",
     code: "ROOM123",
-    user: { id: "user-a", name: "A", profileCode: "ROOM123" }
+    user: { id: "user-a", profileCode: "ROOM123" }
   };
   const mutations = [
     mutation({
@@ -73,6 +87,31 @@ test("worker materialization sorts by HLC and keeps tombstones out of visible st
   assert.equal(restored.articles[0].title, "New");
 });
 
+test("worker materializes article share rooms", () => {
+  const room = {
+    type: "article_share",
+    code: "ART123",
+    articleId: "article-1"
+  };
+  const mutations = [
+    mutation({
+      id: "article",
+      entityId: "article-1",
+      field: "_create",
+      timestamp: hlc(100),
+      value: {
+        id: "article-1",
+        requestedUrl: "https://example.com/a",
+        title: "Shared"
+      }
+    })
+  ];
+
+  const materialized = materializeMutations(mutations, room);
+  assert.equal(materialized.articles.length, 1);
+  assert.equal(materialized.articles[0].title, "Shared");
+});
+
 test("sync confirmation removes queued ids and advances high watermark", () => {
   const queued = [
     mutation({ id: "one", timestamp: hlc(100) }),
@@ -112,7 +151,6 @@ function mutation(overrides) {
     value: "value",
     timestamp: hlc(100),
     authorId: "user-a",
-    authorName: "A",
     deviceId: "device-a",
     ...overrides
   };

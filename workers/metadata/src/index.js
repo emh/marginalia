@@ -66,44 +66,83 @@ async function createMetadata(page, env) {
 }
 
 async function extractWithOpenAI(page, env) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: env.OPENAI_MODEL,
-      input: [
-        {
-          role: "system",
-          content: `Extract article metadata for a private reading-list app. Use only the provided article text and page hints. Return concise, factual JSON. The category must be one broad top-level bucket from this list: ${BROAD_CATEGORIES.join(", ")}. Put narrow topics in tags, not category.`
-        },
-        {
-          role: "user",
-          content: articlePrompt(page)
-        }
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "article_metadata",
-          strict: true,
-          schema: metadataSchema()
-        }
-      }
-    })
-  });
+  const useWebSearch = shouldUseWebSearch(page, env);
+  let response = await requestOpenAIMetadata(page, env, useWebSearch);
+  let searchError = "";
+
+  if (!response.ok && useWebSearch) {
+    searchError = await openAIError(response, "OpenAI metadata request with web search failed");
+    response = await requestOpenAIMetadata(page, env, false);
+  }
 
   if (!response.ok) {
-    throw new Error(await openAIError(response, "OpenAI metadata request failed"));
+    const message = await openAIError(response, "OpenAI metadata request failed");
+    throw new Error(searchError ? `${searchError}; ${message}` : message);
   }
 
   const payload = await response.json();
   const outputText = getOutputText(payload);
   if (!outputText) throw new Error("OpenAI returned no metadata text");
 
-  return normalizeMetadata(JSON.parse(outputText), page);
+  const metadata = normalizeMetadata(JSON.parse(outputText), page);
+  metadata.sources = mergeSources(metadata.sources, openAISources(payload));
+  return metadata;
+}
+
+async function requestOpenAIMetadata(page, env, useWebSearch) {
+  const body = {
+    model: env.OPENAI_MODEL,
+    input: [
+      {
+        role: "system",
+        content: metadataSystemPrompt(useWebSearch)
+      },
+      {
+        role: "user",
+        content: articlePrompt(page)
+      }
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "article_metadata",
+        strict: true,
+        schema: metadataSchema()
+      }
+    }
+  };
+
+  if (useWebSearch) {
+    body.tools = [{ type: "web_search" }];
+    body.tool_choice = "auto";
+    body.include = ["web_search_call.action.sources"];
+  }
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  return response;
+}
+
+function shouldUseWebSearch(page, env) {
+  if (env.METADATA_WEB_SEARCH === "false") return false;
+  const text = String(page.text || page.textContent || "").trim();
+  return page.fetchStatus === "metadata_only" || countWords(text) < 80;
+}
+
+function metadataSystemPrompt(useWebSearch) {
+  const base = `Extract article metadata for a private reading-list app. Return concise, factual JSON. The category must be one broad top-level bucket from this list: ${BROAD_CATEGORIES.join(", ")}. Put narrow topics in tags, not category.`;
+  if (!useWebSearch) {
+    return `${base} Use only the provided article text and page hints. Put an empty array in sources.`;
+  }
+
+  return `${base} The article text may be missing or incomplete. Use web search only to find public metadata, snippets, and reliable references for the exact URL or canonical article. Do not invent article body text and do not claim access to content that is not supported by the provided text or public search results. Include source URLs that support the summary in sources.`;
 }
 
 async function embedMetadata(metadata, env) {
@@ -150,9 +189,11 @@ function articlePrompt(page) {
     `Publisher hint: ${page.siteName || page.source || ""}`,
     `Published hint: ${page.publishedAt || ""}`,
     `Word count hint: ${page.wordCount || ""}`,
+    `Extraction status: ${page.fetchStatus || ""}`,
+    `Extraction error: ${page.fetchError || page.error || ""}`,
     "",
     "Article text:",
-    String(page.text || "").slice(0, MAX_PROMPT_CHARS)
+    String(page.text || page.textContent || "").slice(0, MAX_PROMPT_CHARS)
   ].join("\n");
 }
 
@@ -160,7 +201,7 @@ function metadataSchema() {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["title", "author", "publisher", "publishedAt", "summary", "tags", "category", "wordCount", "canonicalUrl"],
+    required: ["title", "author", "publisher", "publishedAt", "summary", "tags", "category", "wordCount", "canonicalUrl", "sources"],
     properties: {
       title: { type: "string" },
       author: { type: "string" },
@@ -175,7 +216,20 @@ function metadataSchema() {
       },
       category: { type: "string", enum: BROAD_CATEGORIES },
       wordCount: { type: "number" },
-      canonicalUrl: { type: "string" }
+      canonicalUrl: { type: "string" },
+      sources: {
+        type: "array",
+        maxItems: 5,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["title", "url"],
+          properties: {
+            title: { type: "string" },
+            url: { type: "string" }
+          }
+        }
+      }
     }
   };
 }
@@ -209,7 +263,8 @@ function normalizeMetadata(metadata, page) {
     tags: tags.map(tag => slugify(tag)).filter(Boolean).slice(0, 8),
     category: normalizeCategory(metadata.category, `${page.title} ${summary} ${tags.join(" ")}`),
     wordCount,
-    canonicalUrl: stringOr(metadata.canonicalUrl, page.canonicalUrl || page.url)
+    canonicalUrl: stringOr(metadata.canonicalUrl, page.canonicalUrl || page.url),
+    sources: normalizeSources(metadata.sources)
   };
 }
 
@@ -228,8 +283,55 @@ function heuristicMetadata(page) {
     category,
     wordCount: page.wordCount || countWords(page.text),
     canonicalUrl: page.canonicalUrl || page.url,
+    sources: [],
     embedding: semanticVector(`${page.title} ${summary} ${tags.join(" ")}`)
   };
+}
+
+function openAISources(payload) {
+  const sources = [];
+
+  for (const item of payload.output || []) {
+    if (Array.isArray(item.action?.sources)) {
+      sources.push(...item.action.sources);
+    }
+
+    for (const content of item.content || []) {
+      for (const annotation of content.annotations || []) {
+        const citation = annotation.url_citation || annotation;
+        if (citation?.url) {
+          sources.push({ title: citation.title || "", url: citation.url });
+        }
+      }
+    }
+  }
+
+  return normalizeSources(sources);
+}
+
+function mergeSources(...groups) {
+  return normalizeSources(groups.flat());
+}
+
+function normalizeSources(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const sources = [];
+
+  for (const item of value) {
+    const url = stringOr(item?.url || item?.uri || item?.href, "");
+    if (!/^https?:\/\//i.test(url)) continue;
+    const key = url.replace(/#.*$/, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sources.push({
+      title: stringOr(item?.title || hostFromUrl(url), hostFromUrl(url)).slice(0, 160),
+      url: key
+    });
+    if (sources.length >= 5) break;
+  }
+
+  return sources;
 }
 
 function summarize(text) {

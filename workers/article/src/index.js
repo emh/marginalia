@@ -1,4 +1,13 @@
 const MAX_ARTICLE_BYTES = 2_000_000;
+const FETCH_TIMEOUT_MS = 12_000;
+const READER_FALLBACK_TIMEOUT_MS = 15_000;
+const BROWSER_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const BROWSER_HEADERS = {
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.1",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Upgrade-Insecure-Requests": "1",
+  "User-Agent": BROWSER_USER_AGENT
+};
 
 export default {
   async fetch(request, env) {
@@ -103,10 +112,8 @@ function isBlockedHost(hostname) {
 
 async function fetchArticlePage(articleUrl) {
   const response = await fetch(articleUrl, {
-    headers: {
-      "Accept": "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.1",
-      "User-Agent": "MarginaliaBot/0.1 (+https://github.com)"
-    }
+    headers: BROWSER_HEADERS,
+    signal: timeoutSignal(FETCH_TIMEOUT_MS)
   });
 
   if (!response.ok) {
@@ -132,16 +139,52 @@ async function fetchArticlePage(articleUrl) {
 }
 
 async function getArticlePage(articleUrl, env) {
+  let directError = "";
   try {
-    return await fetchArticlePage(articleUrl);
+    const page = await fetchArticlePage(articleUrl);
+    directError = pageQualityError(page);
+    if (!directError) return page;
   } catch (error) {
-    const directError = messageFromError(error);
-    const readerPage = await fetchReaderFallback(articleUrl, directError, env);
-    if (readerPage) return readerPage;
-
-    console.warn(`Article fetch failed for ${articleUrl}: ${directError}`);
-    throw new Error(`Article could not be extracted: ${directError}`);
+    directError = messageFromError(error);
   }
+
+  const readerPage = await fetchReaderFallback(articleUrl, directError, env);
+  if (readerPage) {
+    const readerError = pageQualityError(readerPage);
+    if (!readerError) return readerPage;
+    directError = `${directError}; reader fallback ${readerError}`;
+  }
+
+  console.warn(`Article fetch failed for ${articleUrl}: ${directError}`);
+  throw new Error(`Article could not be extracted: ${directError}`);
+}
+
+function pageQualityError(page) {
+  const text = String(page?.textContent || page?.text || "").replace(/\s+/g, " ").trim();
+  const title = String(page?.title || "");
+  const haystack = `${title}\n${text}`.toLowerCase();
+
+  if (/\b(enable|turn on|requires?)\s+javascript\b|\bjavascript\s+(is\s+)?(disabled|required|unavailable)\b/.test(haystack)) {
+    return "page requires JavaScript";
+  }
+  if (/\bchecking your browser\b|\bverify you are human\b|\bare you a robot\b|\baccess denied\b|\bblocked\b/.test(haystack)) {
+    return "page returned an interstitial";
+  }
+  if (/\b403 forbidden\b|\bcaptcha\b|\barticle text is unavailable\b|\bunable to extract article content\b/.test(haystack)) {
+    return "page returned an access error";
+  }
+  if (countWords(text) < 40 && !(Array.isArray(page?.headings) && page.headings.length)) {
+    return "not enough article text";
+  }
+
+  return "";
+}
+
+function timeoutSignal(ms) {
+  if (AbortSignal.timeout) return AbortSignal.timeout(ms);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
 }
 
 async function fetchReaderFallback(articleUrl, directError, env) {
@@ -153,7 +196,8 @@ async function fetchReaderFallback(articleUrl, directError, env) {
       headers: {
         "Accept": "text/plain, text/markdown;q=0.9, */*;q=0.1",
         "User-Agent": "MarginaliaBot/0.1 (+https://github.com)"
-      }
+      },
+      signal: timeoutSignal(READER_FALLBACK_TIMEOUT_MS)
     });
 
     if (!response.ok) {
@@ -416,38 +460,42 @@ async function askMetadataWorker(page, env) {
     body: JSON.stringify(page)
   });
 
-  let serviceBindingError = null;
+  const errors = [];
 
   if (env.METADATA?.fetch) {
     let response;
     try {
       response = await env.METADATA.fetch(request);
     } catch (error) {
-      serviceBindingError = error;
+      errors.push(messageFromError(error));
     }
 
     if (response) {
-      if (!response.ok) {
-        throw new Error(await responseError(response, "Metadata Worker failed"));
+      if (response.ok) {
+        return response.json();
       }
-      return response.json();
+      errors.push(await responseError(response, "Metadata service binding failed"));
     }
   }
 
   if (env.METADATA_WORKER_URL) {
-    const response = await fetch(new URL("/metadata", env.METADATA_WORKER_URL), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(page)
-    });
-    if (!response.ok) {
-      throw new Error(await responseError(response, "Metadata Worker failed"));
+    try {
+      const response = await fetch(new URL("/metadata", env.METADATA_WORKER_URL), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(page)
+      });
+      if (response.ok) {
+        return response.json();
+      }
+      errors.push(await responseError(response, "Metadata Worker URL failed"));
+    } catch (error) {
+      errors.push(messageFromError(error));
     }
-    return response.json();
   }
 
-  if (serviceBindingError) {
-    throw serviceBindingError;
+  if (errors.length) {
+    throw new Error(errors.join("; "));
   }
 
   throw new Error("Metadata Worker is not configured");
@@ -507,15 +555,15 @@ function buildArticle(page, metadata) {
     isArchived: false,
     deleted: false,
     addedByUserId: "",
-    addedByName: "",
     updatedAt: "",
     wordCount,
     readingTime: Math.max(1, Math.round(wordCount / 225)),
     category: metadata.category || "Other",
     embedding: Array.isArray(metadata.embedding) ? metadata.embedding : semanticVector(`${metadata.category || ""} ${metadata.summary || ""}`),
     isRead: false,
-    status: page.fetchStatus || metadata.status || "ready",
-    error: [page.fetchError, metadata.error].filter(Boolean).join("; ")
+    status: metadata.status === "metadata_failed" ? metadata.status : page.fetchStatus || metadata.status || "ready",
+    error: [page.fetchError, metadata.error].filter(Boolean).join("; "),
+    metadataSources: Array.isArray(metadata.sources) ? metadata.sources.slice(0, 5) : []
   };
 
   return {
@@ -582,13 +630,18 @@ function decodeEntities(value) {
 }
 
 function titleFromUrl(url) {
-  const slug = url.pathname.split("/").filter(Boolean).pop() || url.hostname;
-  return slug
-    .replace(/\.[a-z0-9]+$/i, "")
-    .split(/[-_]+/g)
-    .filter(Boolean)
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+  try {
+    const parsed = url instanceof URL ? url : new URL(String(url || ""));
+    const slug = parsed.pathname.split("/").filter(Boolean).pop() || parsed.hostname;
+    return slug
+      .replace(/\.[a-z0-9]+$/i, "")
+      .split(/[-_]+/g)
+      .filter(Boolean)
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  } catch {
+    return "Untitled article";
+  }
 }
 
 function hostFromUrl(url) {
