@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#fffff8">
+  <title>Marginalia Privacy Policy</title>
+  <link rel="icon" href="./icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper: #fffff8;
+      --ink: #111;
+      --ink-mid: #555;
+      --ink-light: #888;
+      --red: #8b0000;
+      --rule: #e0dcd6;
+      --font: "Crimson Pro", "Palatino Linotype", Palatino, Georgia, serif;
+      --mono: "SF Mono", "Menlo", "Consolas", "Liberation Mono", monospace;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 19px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 56px 24px 96px;
+    }
+
+    nav {
+      margin-bottom: 36px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    h1,
+    h2 {
+      margin: 0;
+      font-weight: 400;
+      letter-spacing: 0;
+      line-height: 1.15;
+    }
+
+    h1 {
+      margin-bottom: 8px;
+      font-size: 42px;
+      font-style: italic;
+      font-weight: 300;
+    }
+
+    h2 {
+      margin-top: 38px;
+      margin-bottom: 10px;
+      padding-top: 24px;
+      border-top: 1px solid var(--rule);
+      font-size: 25px;
+    }
+
+    p,
+    ul {
+      margin: 0 0 18px;
+    }
+
+    ul {
+      padding-left: 24px;
+    }
+
+    li {
+      margin-bottom: 8px;
+    }
+
+    a {
+      color: var(--red);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .effective-date {
+      margin-bottom: 32px;
+      color: var(--ink-light);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .summary {
+      margin-bottom: 30px;
+      color: var(--ink-mid);
+      font-size: 21px;
+      line-height: 1.5;
+    }
+
+    .muted {
+      color: var(--ink-light);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><a href="./">back to marginalia</a></nav>
+
+    <h1>Privacy Policy</h1>
+    <p class="effective-date">Effective date: April 19, 2026</p>
+
+    <p class="summary">
+      Marginalia is a local-first reading app. The Marginalia Capture extension reads the current page only when you click the extension, then sends the article you chose to save to your Marginalia library.
+    </p>
+
+    <h2>What the extension collects</h2>
+    <p>
+      When you click the Marginalia Capture extension on an article page, it reads content from the active tab so it can create a saved article. This may include:
+    </p>
+    <ul>
+      <li>article text and headings</li>
+      <li>page title, byline, site name, publication date, and description when available</li>
+      <li>the page URL and canonical URL</li>
+      <li>language and basic article metadata</li>
+    </ul>
+    <p>
+      The extension does not continuously monitor browsing, read pages in the background, record keystrokes, or collect content from tabs you did not choose to save.
+    </p>
+
+    <h2>How saved articles are used</h2>
+    <p>
+      Captured articles are sent to the Marginalia app so they can be saved in your library. The app may send article text and metadata to Marginalia workers to normalize the article, generate summaries, tags, categories, and related-reading signals, and sync your library if you enable library linking.
+    </p>
+    <p>
+      Marginalia workers run on Cloudflare. Metadata enrichment may use OpenAI services to process article text and return summaries, tags, categories, and embeddings. Marginalia does not use saved article content for advertising.
+    </p>
+
+    <h2>Local storage and sync</h2>
+    <p>
+      Marginalia stores your library locally in your browser first. If you link a library across devices, article records and sync mutations are stored in a Cloudflare Durable Object room associated with your library code so your devices can stay in sync.
+    </p>
+    <p>
+      The extension stores your Marginalia app URL setting. During capture, it temporarily stores one captured article payload in Chrome extension storage until the Marginalia app imports it. Imported captures are cleared, and stale captures are pruned.
+    </p>
+
+    <h2>Sharing</h2>
+    <p>
+      If you use article sharing, Marginalia creates a share URL for the selected article. Anyone with that share URL can import that article into their own library.
+    </p>
+
+    <h2>What is not collected</h2>
+    <p>
+      Marginalia does not require an account, password, or payment information. The extension does not sell data, use data for ad targeting, or transfer saved article content except as needed to provide capture, metadata enrichment, sync, and sharing.
+    </p>
+
+    <h2>Retention and deletion</h2>
+    <p>
+      Local browser data remains until you delete articles in Marginalia, clear browser storage, or remove the app data. Synced library data remains while needed to provide sync and sharing. Deleting an article marks it deleted in your library and syncs that change to linked devices.
+    </p>
+
+    <h2>Security</h2>
+    <p>
+      Marginalia uses HTTPS for deployed app and worker communication. The extension runs packaged code and does not load or execute remote scripts.
+    </p>
+
+    <h2>Changes</h2>
+    <p>
+      This policy may be updated when Marginalia changes how capture, sync, sharing, or metadata processing works. The effective date above will be updated when material changes are made.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      For privacy questions, use the contact email listed on the Marginalia Capture Chrome Web Store listing.
+    </p>
+
+    <p class="muted">
+      This page describes Marginalia and the Marginalia Capture browser extension.
+    </p>
+  </main>
+</body>
+</html>

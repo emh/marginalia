@@ -10,6 +10,7 @@ const CACHE_NAME = `${CACHE_PREFIX}-${BUILD_ID}`;
 const APP_SHELL = [
   "./",
   "./index.html",
+  "./privacy.html",
   "./styles.css",
   "./config.js",
   "./version.js",

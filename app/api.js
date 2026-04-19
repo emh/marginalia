@@ -2,6 +2,7 @@ import { normalizeArticleRecord } from "./model.js";
 import { loadSettings } from "./storage.js";
 
 const EXTRACT_PATH = "/api/extract";
+const CAPTURE_PATH = "/api/capture";
 
 const BROAD_CATEGORY_MATCHERS = [
   ["Business", /\b(startup|startups|business|strategy|management|company|companies|market|markets|economics|finance|labor|work)\b/i],
@@ -16,7 +17,15 @@ const BROAD_CATEGORY_MATCHERS = [
 ];
 
 export async function ingestArticle(url, settings = loadSettings()) {
-  const endpoint = getEndpoint(settings.apiBaseUrl);
+  return requestArticle(EXTRACT_PATH, { url }, settings);
+}
+
+export async function captureArticle(capture, settings = loadSettings()) {
+  return requestArticle(CAPTURE_PATH, capture, settings);
+}
+
+async function requestArticle(path, body, settings) {
+  const endpoint = getEndpoint(settings.apiBaseUrl, path);
   const headers = {
     "Content-Type": "application/json"
   };
@@ -28,7 +37,7 @@ export async function ingestArticle(url, settings = loadSettings()) {
   const response = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({ url })
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
@@ -44,9 +53,9 @@ export async function ingestArticle(url, settings = loadSettings()) {
   return article;
 }
 
-function getEndpoint(apiBaseUrl) {
+function getEndpoint(apiBaseUrl, path = EXTRACT_PATH) {
   const base = apiBaseUrl ? apiBaseUrl.replace(/\/+$/, "") : getSameOriginApiBase();
-  return new URL(EXTRACT_PATH, `${base}/`).toString();
+  return new URL(path, `${base}/`).toString();
 }
 
 function getSameOriginApiBase() {

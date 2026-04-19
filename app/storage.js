@@ -139,6 +139,7 @@ export function loadSettings() {
   return {
     apiBaseUrl: getConfiguredApiBaseUrl() || getDefaultArticleApiBaseUrl(),
     syncBaseUrl: getConfiguredSyncBaseUrl() || getDefaultSyncBaseUrl(),
+    extensionInstallUrl: getConfiguredExtensionInstallUrl(),
     appToken: ""
   };
 }
@@ -290,6 +291,13 @@ function getConfiguredSyncBaseUrl() {
   if (typeof value !== "string") return "";
   if (value.includes("YOUR_")) return "";
   return value.trim().replace(/\/+$/, "");
+}
+
+function getConfiguredExtensionInstallUrl() {
+  const value = globalThis.MARGINALIA_CONFIG?.extensionInstallUrl;
+  if (typeof value !== "string") return "";
+  if (value.includes("YOUR_") || value.includes("EXTENSION_ID")) return "";
+  return value.trim();
 }
 
 function isQueuedMutation(mutation) {

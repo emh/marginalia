@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Marginalia Capture</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 32px;
+      color: #171717;
+      background: #fffff8;
+      font: 18px/1.5 Georgia, serif;
+    }
+
+    main {
+      max-width: 640px;
+    }
+
+    h1 {
+      margin: 0 0 24px;
+      font-size: 32px;
+      font-weight: 500;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    input {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #d8d5cb;
+      border-radius: 4px;
+      background: #fffef5;
+      color: #171717;
+      font: inherit;
+    }
+
+    button {
+      margin-top: 18px;
+      padding: 8px 14px;
+      border: 1px solid #9a0000;
+      border-radius: 4px;
+      background: transparent;
+      color: #9a0000;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    p {
+      max-width: 48ch;
+      color: #575757;
+    }
+
+    #status {
+      min-height: 1.5em;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Marginalia Capture</h1>
+    <form id="options-form">
+      <label for="app-url">Marginalia URL</label>
+      <input id="app-url" name="app-url" type="url" required>
+      <button type="submit">Save</button>
+    </form>
+    <p id="status" role="status"></p>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

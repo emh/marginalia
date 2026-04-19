@@ -1,4 +1,4 @@
-import { ingestArticle } from "./api.js";
+import { captureArticle, ingestArticle } from "./api.js";
 import {
   applyMutation,
   applyMutations,
@@ -33,6 +33,8 @@ const ADD_ARTICLE_STEPS = [
   "indexing..."
 ];
 const SCREEN_EXIT_MS = 280;
+const EXTENSION_PROMPT_DELAY_MS = 1800;
+const EXTENSION_PROMPT_DURATION_MS = 6000;
 
 const loadedState = loadAppState();
 const state = {
@@ -55,6 +57,9 @@ let toastTimer;
 let librarySync = null;
 let renderedSetupKey = "";
 let screenTransitionToken = 0;
+const processedCaptureIds = new Set();
+let captureExtensionInstalled = false;
+let extensionPromptTimer;
 
 function esc(value) {
   const div = document.createElement("div");
@@ -95,12 +100,29 @@ function hostFromUrl(url) {
   }
 }
 
-function toast(message) {
+function toast(message, options = {}) {
   const el = $("toast");
-  el.textContent = message;
+  el.textContent = "";
+  el.classList.toggle("has-action", Boolean(options.href));
+
+  if (options.href) {
+    const link = document.createElement("a");
+    link.className = "toast-link";
+    link.href = options.href;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = message;
+    el.append(link);
+  } else {
+    el.textContent = message;
+  }
+
   el.classList.add("visible");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("visible"), 2000);
+  toastTimer = setTimeout(() => {
+    el.classList.remove("visible");
+    el.classList.remove("has-action");
+  }, options.duration || 2000);
 }
 
 function save() {
@@ -768,6 +790,63 @@ async function addArticle(url) {
   }
 }
 
+async function addCapturedArticle(payload, captureId = "") {
+  const id = String(captureId || "");
+  if (id && processedCaptureIds.has(id)) return;
+  if (isProcessing) return;
+
+  isProcessing = true;
+  if (id) processedCaptureIds.add(id);
+  let didSave = false;
+
+  const input = $("main-input");
+  const status = $("input-status");
+  const progress = $("input-progress");
+  const stopStatus = startArticleStatus(status);
+
+  input.disabled = true;
+  status.classList.remove("is-error");
+  progress.classList.add("running");
+
+  try {
+    const article = await captureArticle(payload, state.settings);
+    stopStatus("saving...");
+    const result = upsertArticle(article);
+    didSave = true;
+
+    stripLinkQuery();
+    renderAll();
+    showDetail(result.article.id);
+    toast(result.added ? "Article added" : "Article already saved");
+    postCaptureResult("marginalia:capture:ack", id);
+  } catch (error) {
+    stopStatus();
+    renderInputError(status, error);
+    status.classList.add("is-error");
+    toast("Could not add article");
+    if (id) processedCaptureIds.delete(id);
+    postCaptureResult("marginalia:capture:error", id, error);
+  } finally {
+    stopStatus();
+    progress.classList.remove("running");
+    if (didSave) {
+      status.textContent = "";
+      status.classList.remove("is-error");
+    }
+    input.disabled = false;
+    isProcessing = false;
+  }
+}
+
+function postCaptureResult(type, id, error) {
+  if (!id) return;
+  globalThis.postMessage({
+    type,
+    id,
+    error: error instanceof Error ? error.message : error ? String(error) : ""
+  }, globalThis.location.origin);
+}
+
 function startArticleStatus(status) {
   let index = 0;
   let isStopped = false;
@@ -1078,6 +1157,10 @@ function stripLinkQuery() {
     url.searchParams.delete("article");
     changed = true;
   }
+  if (url.searchParams.has("capture")) {
+    url.searchParams.delete("capture");
+    changed = true;
+  }
   if (!changed) return;
   history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
@@ -1144,6 +1227,30 @@ function configureSync() {
   }
 }
 
+function markCaptureExtensionInstalled() {
+  captureExtensionInstalled = true;
+  clearTimeout(extensionPromptTimer);
+}
+
+function scheduleExtensionInstallPrompt() {
+  clearTimeout(extensionPromptTimer);
+  if (captureExtensionInstalled || !state.settings.extensionInstallUrl || !isDesktopChromium()) return;
+
+  extensionPromptTimer = setTimeout(() => {
+    if (captureExtensionInstalled) return;
+    toast("Click here to install chrome extension", {
+      href: state.settings.extensionInstallUrl,
+      duration: EXTENSION_PROMPT_DURATION_MS
+    });
+  }, EXTENSION_PROMPT_DELAY_MS);
+}
+
+function isDesktopChromium() {
+  const ua = navigator.userAgent || "";
+  if (/Android|iPhone|iPad|iPod/i.test(ua)) return false;
+  return /\b(?:Chrome|Chromium|Edg)\//.test(ua) && !/\bOPR\//.test(ua);
+}
+
 function handleLinkQueries() {
   const params = new URLSearchParams(globalThis.location.search);
   const libraryCode = normalizeCode(params.get("library"));
@@ -1175,6 +1282,16 @@ function runAction(fn) {
 function bindEvents() {
   const input = $("main-input");
   const status = $("input-status");
+
+  globalThis.addEventListener("message", event => {
+    if (event.source !== globalThis || event.origin !== globalThis.location.origin) return;
+    if (event.data?.type === "marginalia:extension-installed") {
+      markCaptureExtensionInstalled();
+      return;
+    }
+    if (event.data?.type !== "marginalia:capture") return;
+    runAction(() => addCapturedArticle(event.data.payload || {}, event.data.id));
+  });
 
   $("link-library-btn")?.addEventListener("click", () => runAction(showLibraryLink));
 
@@ -1292,6 +1409,7 @@ function init() {
   handleLinkQueries();
   configureSync();
   renderAll();
+  scheduleExtensionInstallPrompt();
   registerServiceWorker();
   watchForAppUpdates();
 }

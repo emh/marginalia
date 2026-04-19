@@ -20,7 +20,7 @@ export default {
     try {
       const url = new URL(request.url);
 
-      if (request.method !== "POST" || !["/api/articles", "/api/extract"].includes(url.pathname)) {
+      if (request.method !== "POST" || !["/api/articles", "/api/extract", "/api/capture"].includes(url.pathname)) {
         return json({ error: "Not found" }, 404, cors);
       }
 
@@ -29,8 +29,9 @@ export default {
       }
 
       const body = await request.json();
-      const articleUrl = normalizeArticleUrl(body.url);
-      const page = await getArticlePage(articleUrl, env);
+      const page = url.pathname === "/api/capture"
+        ? normalizeCapturedPage(body)
+        : await getArticlePage(normalizeArticleUrl(body.url), env);
       const metadata = await getArticleMetadata(page, env);
       const article = buildArticle(page, metadata);
 
@@ -157,6 +158,89 @@ async function getArticlePage(articleUrl, env) {
 
   console.warn(`Article fetch failed for ${articleUrl}: ${directError}`);
   throw new Error(`Article could not be extracted: ${directError}`);
+}
+
+function normalizeCapturedPage(input = {}) {
+  const requestedUrl = normalizeCapturedUrl(input.requestedUrl || input.url || input.finalUrl || input.canonicalUrl);
+  const finalUrl = normalizeOptionalCapturedUrl(input.finalUrl || input.url) || requestedUrl;
+  const canonicalUrl = normalizeOptionalCapturedUrl(input.canonicalUrl) || finalUrl;
+  const sourceHost = stringOr(input.sourceHost || input.source, hostFromUrl(canonicalUrl || finalUrl || requestedUrl));
+  const contentMarkdown = cleanMarkdown(input.contentMarkdown || "");
+  const text = normalizeCapturedText(input.textContent || input.text || markdownToText(contentMarkdown));
+  const headings = normalizeCapturedHeadings(input.headings);
+  const page = {
+    requestedUrl,
+    finalUrl,
+    url: requestedUrl,
+    canonicalUrl,
+    sourceHost,
+    source: sourceHost,
+    siteName: stringOr(input.siteName || input.publisher, sourceHost),
+    title: stringOr(input.title, titleFromUrl(canonicalUrl || finalUrl || requestedUrl)),
+    byline: stringOr(input.byline || input.author, ""),
+    author: stringOr(input.byline || input.author, ""),
+    publishedAt: typeof input.publishedAt === "string" && input.publishedAt ? input.publishedAt : null,
+    capturedAt: typeof input.capturedAt === "string" && input.capturedAt ? input.capturedAt : "",
+    lang: stringOr(input.lang, ""),
+    contentMarkdown,
+    textContent: text,
+    headings: headings.length ? headings : headingsFromMarkdown(contentMarkdown),
+    text,
+    wordCount: countWords(text),
+    fetchStatus: "captured"
+  };
+
+  const qualityError = pageQualityError(page);
+  if (qualityError) {
+    throw new Error(`Captured article is not readable: ${qualityError}`);
+  }
+
+  return page;
+}
+
+function normalizeCapturedUrl(input) {
+  if (typeof input !== "string" || !input.trim()) {
+    throw new Error("Captured article URL is required");
+  }
+
+  const text = input.trim();
+  const url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error("Only HTTP and HTTPS captured URLs are supported");
+  }
+  url.hash = "";
+  return url.toString();
+}
+
+function normalizeOptionalCapturedUrl(input) {
+  try {
+    return input ? normalizeCapturedUrl(input) : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeCapturedText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function stringOr(value, fallback) {
+  const text = String(value || "").trim();
+  return text || fallback;
+}
+
+function normalizeCapturedHeadings(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => {
+      if (typeof item === "string") return { level: 2, text: item.trim() };
+      return {
+        level: Math.min(6, Math.max(1, Number(item?.level) || 2)),
+        text: String(item?.text || "").trim()
+      };
+    })
+    .filter(item => item.text)
+    .slice(0, 64);
 }
 
 function pageQualityError(page) {
@@ -532,7 +616,7 @@ function buildArticle(page, metadata) {
   const sourceHost = metadata.sourceHost || metadata.source || page.sourceHost || page.source || hostFromUrl(canonicalUrl || finalUrl || requestedUrl);
   const byline = metadata.byline || metadata.author || page.byline || page.author || "Unknown";
   const excerpt = metadata.excerpt || metadata.summary || summarize(page.text);
-  const capturedAt = new Date().toISOString();
+  const capturedAt = page.capturedAt || new Date().toISOString();
 
   const article = {
     id: crypto.randomUUID(),
