@@ -64,7 +64,7 @@ The Worker deploy workflow lives at `.github/workflows/deploy-workers.yml`. Add 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
 
-The workflow deploys `marginalia-metadata` first, then `marginalia-article`, because the article Worker has a service binding to the metadata Worker.
+The workflow deploys `marginalia-metadata`, `marginalia-article`, and `marginalia-sync`. The metadata Worker is deployed before the article Worker because the article Worker has a service binding to the metadata Worker.
 
 You can also deploy manually:
 
@@ -83,6 +83,7 @@ In GitHub, set Pages source to **GitHub Actions**:
 ## Current Shape
 
 - `app/` contains the static GitHub Pages app.
-- `workers/article/` is the public API Worker. It fetches article pages, extracts plain text, and asks the metadata Worker for metadata.
+- `workers/article/` is the public API Worker. It fetches article pages, extracts plain text, accepts browser-captured articles, and asks the metadata Worker for metadata.
 - `workers/metadata/` is the LLM-facing Worker. It is where the OpenAI key belongs.
+- `workers/sync/` is the Durable Object sync Worker for libraries and article share links.
 - `prototype.html` remains as the original visual/interaction reference.
