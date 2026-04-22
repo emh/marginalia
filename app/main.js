@@ -693,7 +693,8 @@ async function shareCurrentArticle() {
   if (!article) return;
   const payload = await createRemoteArticleShare({
     user: state.user,
-    article
+    article,
+    appUrl: currentAppBaseLink()
   }, state.settings);
   const code = normalizeCode(payload.code || payload.room?.code);
   if (!code) throw new Error("Article share code missing");
@@ -1131,19 +1132,34 @@ function mergeMaterializedPayload(payload = {}) {
 }
 
 function libraryLink(code) {
-  const url = new URL(globalThis.location.href);
-  url.search = "";
-  url.hash = "";
+  const url = new URL(currentAppBaseLink());
   url.searchParams.set("library", code);
   return url.toString();
 }
 
-function articleShareLink(code) {
+function currentAppBaseLink() {
   const url = new URL(globalThis.location.href);
   url.search = "";
   url.hash = "";
+  return url.toString();
+}
+
+function articleAppLink(code) {
+  const url = new URL(currentAppBaseLink());
   url.searchParams.set("article", code);
   return url.toString();
+}
+
+function articleShareLink(code) {
+  const appUrl = articleAppLink(code);
+  if (!state.settings.syncBaseUrl) return appUrl;
+
+  try {
+    const url = new URL(`/share/articles/${encodeURIComponent(normalizeCode(code))}`, `${state.settings.syncBaseUrl.replace(/\/+$/, "")}/`);
+    return url.toString();
+  } catch {
+    return appUrl;
+  }
 }
 
 function stripLinkQuery() {
@@ -1176,6 +1192,12 @@ async function shareText(title, url, fallbackMessage) {
   } else {
     await copyText(url, fallbackMessage);
   }
+}
+
+function currentArticleShareTitle() {
+  const articleId = state.setupPayload?.articleId;
+  const article = getArticles({ includeDeleted: true }).find(candidate => candidate.id === articleId);
+  return article?.title || "share marginalia article";
 }
 
 function renderSyncIndicator() {
@@ -1306,7 +1328,7 @@ function bindEvents() {
       if (action.dataset.action === "share-library-url") return shareText("link marginalia library", $("library-share-url")?.value || "", "url copied");
       if (action.dataset.action === "copy-article-url") return copyText($("article-share-url")?.value || "", "url copied");
       if (action.dataset.action === "copy-article-code") return copyText($("article-share-code")?.textContent || "", "code copied");
-      if (action.dataset.action === "share-article-url") return shareText("share marginalia article", $("article-share-url")?.value || "", "url copied");
+      if (action.dataset.action === "share-article-url") return shareText(currentArticleShareTitle(), $("article-share-url")?.value || "", "url copied");
     });
   });
 

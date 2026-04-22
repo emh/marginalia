@@ -252,11 +252,11 @@ export async function fetchRemoteLibrary(code, settings = loadSettings()) {
   return response.json();
 }
 
-export async function createRemoteArticleShare({ article, user, mutations }, settings = loadSettings()) {
+export async function createRemoteArticleShare({ article, user, mutations, appUrl }, settings = loadSettings()) {
   const response = await fetch(getEndpoint(settings.syncBaseUrl, "/api/articles"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ article, user, mutations })
+    body: JSON.stringify({ article, user, mutations, appUrl })
   });
 
   if (!response.ok) throw new Error(await getErrorMessage(response));

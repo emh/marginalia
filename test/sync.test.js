@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MarginaliaSync } from "../app/sync.js";
-import { materializeMutations, parseLibraryRoute, parseRoomRoute } from "../workers/sync/src/index.js";
+import {
+  articleSharePreviewHtml,
+  buildArticleAppUrl,
+  materializeMutations,
+  normalizeArticleShareRoom,
+  normalizeRoom,
+  parseArticlePreviewRoute,
+  parseLibraryRoute,
+  parseRoomRoute
+} from "../workers/sync/src/index.js";
 
 test("library routes parse only supported room paths", () => {
   assert.deepEqual(parseLibraryRoute("/api/libraries/abc123/sync"), {
@@ -26,7 +35,72 @@ test("article share routes parse supported room paths", () => {
     code: "ABC123",
     action: "state"
   });
+  assert.deepEqual(parseRoomRoute("/api/articles/abc123/preview"), {
+    kind: "articles",
+    code: "ABC123",
+    action: "preview"
+  });
+  assert.deepEqual(parseArticlePreviewRoute("/share/articles/abc123"), {
+    kind: "articles",
+    code: "ABC123",
+    action: "preview"
+  });
   assert.equal(parseRoomRoute("/api/folders/abc123"), null);
+  assert.equal(parseArticlePreviewRoute("/share/libraries/abc123"), null);
+});
+
+test("article share rooms keep a clean app URL for preview redirects", () => {
+  const room = normalizeRoom({
+    kind: "articles",
+    code: "abc123",
+    action: ""
+  }, {
+    article: { id: "article-1" },
+    appUrl: "https://emh.io/marginalia/?article=OLD#reader"
+  });
+
+  assert.equal(room.appUrl, "https://emh.io/marginalia/");
+});
+
+test("article share room normalization validates required article fields", () => {
+  const room = normalizeArticleShareRoom({
+    code: "abc123",
+    article: { id: "article-1" },
+    appUrl: "not a url"
+  });
+
+  assert.equal(room.articleId, "article-1");
+  assert.equal(room.appUrl, "");
+});
+
+test("article preview redirects only to allowed app origins", () => {
+  const env = {
+    ALLOWED_ORIGINS: "http://localhost:8010,https://emh.io",
+    APP_BASE_URL: "https://emh.io/marginalia/"
+  };
+  const request = new Request("https://marginalia-sync.example/share/articles/abc123?app=https%3A%2F%2Fevil.example%2F");
+
+  assert.equal(
+    buildArticleAppUrl(request, env, "abc123", { appUrl: "http://localhost:8010/app/" }),
+    "http://localhost:8010/app/?article=ABC123"
+  );
+});
+
+test("article preview html includes escaped article metadata", () => {
+  const html = articleSharePreviewHtml({
+    article: {
+      title: "A&B \"C\"",
+      excerpt: "Less <more>",
+      lang: "en",
+      url: "https://example.com/a"
+    },
+    appUrl: "https://emh.io/marginalia/?article=ABC123",
+    previewUrl: "https://marginalia-sync.example/share/articles/ABC123"
+  });
+
+  assert.match(html, /<meta property="og:title" content="A&amp;B &quot;C&quot;">/);
+  assert.match(html, /<meta property="og:description" content="Less &lt;more&gt;">/);
+  assert.match(html, /location\.replace/);
 });
 
 test("worker materialization sorts by HLC and keeps tombstones out of visible state", () => {

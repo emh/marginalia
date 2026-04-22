@@ -57,7 +57,7 @@ Keep the OpenAI key out of GitHub. Store it as a Cloudflare Worker secret on the
 npx wrangler secret put OPENAI_API_KEY --config workers/metadata/wrangler.toml
 ```
 
-The production model names are non-secret Worker vars in `workers/metadata/wrangler.toml`. The GitHub Pages origin is allowed by CORS in `workers/article/wrangler.toml`; add any future custom frontend domain there too.
+The production model names are non-secret Worker vars in `workers/metadata/wrangler.toml`. The GitHub Pages origin is allowed by CORS in `workers/article/wrangler.toml` and `workers/sync/wrangler.toml`; add any future custom frontend domain there too. The sync Worker also uses `APP_BASE_URL` for article share preview redirects.
 
 The Worker deploy workflow lives at `.github/workflows/deploy-workers.yml`. Add these GitHub repository secrets before relying on the workflow:
 

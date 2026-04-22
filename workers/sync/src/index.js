@@ -90,6 +90,10 @@ export class LibraryRoom {
         return json(await this.materializedPayload(await this.requireRoom()), 200, cors);
       }
 
+      if (route.kind === "articles" && route.action === "preview" && request.method === "GET") {
+        return this.handleArticlePreview(request, route, cors);
+      }
+
       return json({ error: "Not found" }, 404, cors);
     } catch (error) {
       return json({ error: messageFromError(error) }, error?.status || 400, cors);
@@ -269,6 +273,24 @@ export class LibraryRoom {
     };
   }
 
+  async handleArticlePreview(request, route, cors) {
+    const room = await this.requireRoom();
+    if (room.type !== "article_share") throw statusError("Article share not found", 404);
+
+    const payload = await this.materializedPayload(room);
+    const article = payload.articles[0];
+    if (!article) throw statusError("Shared article not found", 404);
+
+    return html(articleSharePreviewHtml({
+      article,
+      appUrl: buildArticleAppUrl(request, this.env, route.code, room),
+      previewUrl: publicArticlePreviewUrl(request, route.code)
+    }), 200, {
+      ...cors,
+      "Cache-Control": "public, max-age=300"
+    });
+  }
+
   async getRoom() {
     return await this.state.storage.get("room") || null;
   }
@@ -296,6 +318,18 @@ export default {
     }
 
     const url = new URL(request.url);
+    const previewRoute = parseArticlePreviewRoute(url.pathname);
+
+    if (previewRoute && request.method === "GET") {
+      const id = env.MARGINALIA_LIBRARY.idFromName(`${roomPrefix(previewRoute.kind)}:${previewRoute.code}`);
+      const room = env.MARGINALIA_LIBRARY.get(id);
+      url.pathname = `/api/articles/${previewRoute.code}/preview`;
+      return room.fetch(new Request(url.toString(), {
+        method: request.method,
+        headers: request.headers,
+        redirect: request.redirect
+      }));
+    }
 
     if (request.method === "POST" && url.pathname === "/api/libraries") {
       return createRoomWithFreshCode(request, env, cors, "libraries");
@@ -341,12 +375,22 @@ async function createRoomWithFreshCode(request, env, cors, kind) {
 }
 
 export function parseRoomRoute(pathname) {
-  const match = /^\/api\/(libraries|articles)\/([A-Za-z0-9]+)(?:\/(sync|state))?\/?$/.exec(pathname);
+  const match = /^\/api\/(libraries|articles)\/([A-Za-z0-9]+)(?:\/(sync|state|preview))?\/?$/.exec(pathname);
   if (!match) return null;
   return {
     kind: match[1],
     code: normalizeCode(match[2]),
     action: match[3] || ""
+  };
+}
+
+export function parseArticlePreviewRoute(pathname) {
+  const match = /^\/share\/articles\/([A-Za-z0-9]+)\/?$/.exec(pathname);
+  if (!match) return null;
+  return {
+    kind: "articles",
+    code: normalizeCode(match[1]),
+    action: "preview"
   };
 }
 
@@ -365,9 +409,9 @@ export function generateInviteCode(length = CODE_LENGTH) {
   return Array.from(bytes, byte => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("");
 }
 
-function normalizeRoom(route, body = {}) {
+export function normalizeRoom(route, body = {}) {
   if (route.kind === "articles") {
-    return normalizeArticleShareRoom({ code: route.code, article: body.article });
+    return normalizeArticleShareRoom({ code: route.code, article: body.article, appUrl: body.appUrl });
   }
 
   return normalizeLibraryRoom({ code: route.code, user: body.user });
@@ -394,8 +438,81 @@ export function normalizeArticleShareRoom(input = {}) {
     type: "article_share",
     code,
     articleId,
+    appUrl: normalizeShareAppUrl(input.appUrl),
     createdAt: typeof input.createdAt === "string" ? input.createdAt : new Date().toISOString()
   };
+}
+
+export function buildArticleAppUrl(request, env, code, room = {}) {
+  const requestUrl = new URL(request.url);
+  const candidates = [
+    requestUrl.searchParams.get("app"),
+    room.appUrl,
+    env.APP_BASE_URL
+  ];
+
+  for (const candidate of candidates) {
+    const appUrl = parseAbsoluteUrl(candidate);
+    if (!appUrl || !isAllowedAppUrl(appUrl, env)) continue;
+    appUrl.searchParams.set("article", normalizeCode(code));
+    appUrl.hash = "";
+    return appUrl.toString();
+  }
+
+  return "";
+}
+
+export function articleSharePreviewHtml({ article, appUrl, previewUrl }) {
+  const title = String(article.title || "Marginalia article").trim() || "Marginalia article";
+  const source = article.source || article.siteName || hostFromUrl(article.url);
+  const description = String(article.excerpt || article.summary || (source ? `An article from ${source}, shared through Marginalia.` : "An article shared through Marginalia."))
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+  const imageUrl = appUrl ? new URL("./icons/icon-192.png", appUrl).toString() : "";
+  const redirectScript = appUrl
+    ? `<script>location.replace(${safeJsonForScript(appUrl)});</script>`
+    : "";
+  const redirectMeta = appUrl
+    ? `<meta http-equiv="refresh" content="0; url=${escapeHtml(appUrl)}">`
+    : "";
+  const canonical = appUrl
+    ? `<link rel="canonical" href="${escapeHtml(appUrl)}">`
+    : "";
+  const imageMeta = imageUrl
+    ? `
+  <meta property="og:image" content="${escapeHtml(imageUrl)}">
+  <meta name="twitter:image" content="${escapeHtml(imageUrl)}">`
+    : "";
+  const openLink = appUrl
+    ? `<p><a href="${escapeHtml(appUrl)}">Open article in Marginalia</a></p>`
+    : "";
+
+  return `<!doctype html>
+<html lang="${escapeHtml(article.lang || "en")}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  ${canonical}
+  ${redirectMeta}
+  <meta name="description" content="${escapeHtml(description)}">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Marginalia">
+  <meta property="og:title" content="${escapeHtml(title)}">
+  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:url" content="${escapeHtml(previewUrl)}">${imageMeta}
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="${escapeHtml(title)}">
+  <meta name="twitter:description" content="${escapeHtml(description)}">
+</head>
+<body>
+  <h1>${escapeHtml(title)}</h1>
+  <p>${escapeHtml(description)}</p>
+  ${openLink}
+  ${redirectScript}
+</body>
+</html>`;
 }
 
 export function validateMutation(input) {
@@ -617,6 +734,50 @@ function normalizeSources(value) {
   return sources;
 }
 
+function normalizeShareAppUrl(value) {
+  const url = parseAbsoluteUrl(value);
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) return "";
+  url.search = "";
+  url.hash = "";
+  return url.toString().slice(0, 2048);
+}
+
+function publicArticlePreviewUrl(request, code) {
+  const url = new URL(request.url);
+  url.pathname = `/share/articles/${encodeURIComponent(normalizeCode(code))}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function parseAbsoluteUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "http:" || url.protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedAppUrl(url, env) {
+  const allowed = allowedOrigins(env);
+  return allowed.includes("*") || allowed.includes(url.origin);
+}
+
+function safeJsonForScript(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function parseSocketMessage(raw) {
   const text = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
   return JSON.parse(text);
@@ -716,11 +877,15 @@ function corsHeaders(request, env) {
 function isAllowedOrigin(request, env) {
   const origin = request.headers.get("Origin");
   if (!origin) return true;
-  const allowed = (env.ALLOWED_ORIGINS || "")
+  const allowed = allowedOrigins(env);
+  return allowed.includes("*") || allowed.includes(origin);
+}
+
+function allowedOrigins(env) {
+  return (env.ALLOWED_ORIGINS || "")
     .split(",")
     .map(value => value.trim())
     .filter(Boolean);
-  return allowed.includes("*") || allowed.includes(origin);
 }
 
 function json(payload, status, headers = {}) {
@@ -729,6 +894,16 @@ function json(payload, status, headers = {}) {
     headers: {
       ...headers,
       "Content-Type": "application/json; charset=utf-8"
+    }
+  });
+}
+
+function html(markup, status, headers = {}) {
+  return new Response(markup, {
+    status,
+    headers: {
+      ...headers,
+      "Content-Type": "text/html; charset=utf-8"
     }
   });
 }

@@ -13,3 +13,4 @@ new_sqlite_classes = [ "LibraryRoom" ]
 
 [vars]
 ALLOWED_ORIGINS = "http://localhost:8010,http://127.0.0.1:8010,https://emh.github.io,https://emh.io"
+APP_BASE_URL = "https://emh.io/marginalia/"
